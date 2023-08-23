@@ -3,12 +3,15 @@ use crate::{generate_object_id, trussed_auth_impl::KEY_LEN};
 use super::{Error, Key, Salt, HASH_LEN, SALT_LEN};
 
 use embedded_hal::blocking::delay::DelayUs;
+use hex_literal::hex;
 use hmac::{Hmac, Mac};
+use iso7816::Status;
+use rand::Rng;
 use se05x::{
     se05x::{
-        commands::{GetRandom, WriteBinary, WriteSymmKey},
+        commands::{CloseSession, CreateSession, GetRandom, ReadObject, WriteBinary, WriteSymmKey},
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
-        Be, ObjectId, Se05X, SymmKeyType,
+        Be, ObjectId, ProcessSessionCmd, Se05X, SessionId, SymmKeyType,
     },
     t1::I2CForT1,
 };
@@ -281,5 +284,150 @@ impl PinData {
             buf,
         )?;
         Ok(this)
+    }
+
+    pub fn check<Twi: I2CForT1, D: DelayUs<u32>, R: RngCore + CryptoRng>(
+        &self,
+        value: &[u8],
+        app_key: &Key,
+        se050: &mut Se05X<Twi, D>,
+        rng: &mut R,
+    ) -> Result<bool, Error> {
+        let buf = &mut [0; 1024];
+        let pin_aes_key_value = expand_pin_key(&self.salt, app_key, self.id, value);
+        let res = se050.run_command(
+            &CreateSession {
+                object_id: self.pin_aes_key_id,
+            },
+            buf,
+        )?;
+        let session_id = res.session_id;
+        let res = match se050.authenticate_aes128_session(session_id, &pin_aes_key_value, rng) {
+            Ok(()) => Ok(true),
+            Err(_) => Ok(false),
+        };
+        se050.run_command(
+            &ProcessSessionCmd {
+                session_id,
+                apdu: CloseSession {},
+            },
+            buf,
+        )?;
+        res
+    }
+
+    pub fn check_and_get_key<Twi: I2CForT1, D: DelayUs<u32>, R: RngCore + CryptoRng>(
+        &self,
+        value: &[u8],
+        app_key: &Key,
+        se050: &mut Se05X<Twi, D>,
+        rng: &mut R,
+    ) -> Result<Option<Key>, Error> {
+        let Some(protected_key_id) = self.protected_key_id else {
+            return Err(Error::BadPinType);
+        };
+
+        let buf = &mut [0; 1024];
+        let pin_aes_key_value = expand_pin_key(&self.salt, app_key, self.id, value);
+        let res = se050.run_command(
+            &CreateSession {
+                object_id: self.pin_aes_key_id,
+            },
+            buf,
+        )?;
+        let session_id = res.session_id;
+        let res = match se050.authenticate_aes128_session(session_id, &pin_aes_key_value, rng) {
+            Ok(()) => {
+                let key = se050.run_command(
+                    &ProcessSessionCmd {
+                        session_id,
+                        apdu: ReadObject {
+                            object_id: protected_key_id,
+                            offset: None,
+                            length: Some((KEY_LEN as u16).into()),
+                            rsa_key_component: None,
+                        },
+                    },
+                    buf,
+                )?;
+                Ok(Some(
+                    key.data
+                        .try_into()
+                        .map_err(|_| Error::DeserializationFailed)?,
+                ))
+            }
+            Err(_) => Ok(None),
+        };
+        se050.run_command(
+            &ProcessSessionCmd {
+                session_id,
+                apdu: CloseSession {},
+            },
+            buf,
+        )?;
+        res
+    }
+
+    pub fn update<Twi: I2CForT1, D: DelayUs<u32>, R: RngCore + CryptoRng>(
+        &mut self,
+        se050: &mut Se05X<Twi, D>,
+        app_key: &Key,
+        old_value: &[u8],
+        new_value: &[u8],
+        fs: &mut impl Filestore,
+        location: Location,
+        rng: &mut R,
+    ) -> Result<bool, Error> {
+        let buf = &mut [0; 1024];
+        let pin_aes_key_value = expand_pin_key(&self.salt, app_key, self.id, old_value);
+        let res = se050.run_command(
+            &CreateSession {
+                object_id: self.pin_aes_key_id,
+            },
+            buf,
+        )?;
+        let session_id = res.session_id;
+        let res = match se050.authenticate_aes128_session(session_id, &pin_aes_key_value, rng) {
+            Ok(()) => Ok(true),
+            Err(_) => Ok(false),
+        };
+
+        self.salt = ByteArray::new(rng.gen());
+        let new_pin_aes_key_value = expand_pin_key(&self.salt, app_key, self.id, new_value);
+        se050.run_command(
+            &ProcessSessionCmd {
+                session_id,
+                apdu: WriteSymmKey {
+                    transient: false,
+                    is_auth: true,
+                    key_type: SymmKeyType::Aes,
+                    policy: None,
+                    max_attempts: None,
+                    object_id: self.pin_aes_key_id,
+                    kek_id: None,
+                    value: &*new_pin_aes_key_value,
+                },
+            },
+            buf,
+        )?;
+        self.save(fs, location)?;
+        se050.run_command(
+            &ProcessSessionCmd {
+                session_id,
+                apdu: CloseSession {},
+            },
+            buf,
+        )?;
+        res
+    }
+
+    pub fn load(id: PinId, fs: &mut impl Filestore, location: Location) -> Result<Self, Error> {
+        // let data = trussed::cbor_serialize_bytes::<_, 256>(&self)
+        //     .map_err(|_| Error::SerializationFailed)?;
+        let data = fs
+            .read::<1024>(&id.path(), location)
+            .map_err(|_| Error::ReadFailed)?;
+        let this = trussed::cbor_deserialize(&data).map_err(|_| Error::DeserializationFailed)?;
+        Ok(Self { id, ..this })
     }
 }

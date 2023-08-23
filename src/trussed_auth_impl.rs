@@ -257,8 +257,30 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 let has_pin = fs.exists(&request.id.path(), self.metadata_location);
                 Ok(reply::HasPin { has_pin }.into())
             }
-            AuthRequest::CheckPin(_req) => Err(trussed::Error::FunctionNotSupported),
-            AuthRequest::GetPinKey(_req) => Err(trussed::Error::FunctionNotSupported),
+            AuthRequest::CheckPin(request) => {
+                let pin_data = PinData::load(request.id, fs, self.metadata_location)?;
+                let app_key = self.get_app_key(client_id, global_fs, &mut backend_ctx.auth, rng)?;
+                let success = pin_data.check(&request.pin, &app_key, &mut self.se, rng)?;
+                Ok(reply::CheckPin { success }.into())
+            }
+            AuthRequest::GetPinKey(request) => {
+                let pin_data = PinData::load(request.id, fs, self.metadata_location)?;
+                let app_key = self.get_app_key(client_id, global_fs, &mut backend_ctx.auth, rng)?;
+                let key = pin_data.check_and_get_key(&request.pin, &app_key, &mut self.se, rng)?;
+                let Some(material) = key else {
+                    return Ok(reply::GetPinKey{result: None}.into());
+                };
+                let key_id = keystore.store_key(
+                    Location::Volatile,
+                    Secrecy::Secret,
+                    Kind::Symmetric(32),
+                    &*material,
+                )?;
+                Ok(reply::GetPinKey {
+                    result: Some(key_id),
+                }
+                .into())
+            }
             AuthRequest::GetApplicationKey(request) => {
                 let salt = get_app_salt(fs, rng, self.metadata_location)?;
                 let key = expand_app_key(
@@ -314,7 +336,20 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 )?;
                 Ok(reply::SetPinWithKey {}.into())
             }
-            AuthRequest::ChangePin(_req) => Err(trussed::Error::FunctionNotSupported),
+            AuthRequest::ChangePin(request) => {
+                let mut pin_data = PinData::load(request.id, fs, self.metadata_location)?;
+                let app_key = self.get_app_key(client_id, global_fs, &mut backend_ctx.auth, rng)?;
+                let success = pin_data.update(
+                    &mut self.se,
+                    &app_key,
+                    &request.old_pin,
+                    &request.new_pin,
+                    fs,
+                    self.metadata_location,
+                    rng,
+                )?;
+                Ok(reply::ChangePin { success }.into())
+            }
             AuthRequest::DeletePin(_req) => Err(trussed::Error::FunctionNotSupported),
             AuthRequest::DeleteAllPins(_req) => Err(trussed::Error::FunctionNotSupported),
             AuthRequest::PinRetries(_req) => Err(trussed::Error::FunctionNotSupported),
