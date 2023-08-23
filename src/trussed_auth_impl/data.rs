@@ -9,9 +9,12 @@ use iso7816::Status;
 use rand::Rng;
 use se05x::{
     se05x::{
-        commands::{CloseSession, CreateSession, GetRandom, ReadObject, WriteBinary, WriteSymmKey},
+        commands::{
+            CloseSession, CreateSession, DeleteSecureObject, GetRandom, ReadObject,
+            VerifySessionUserId, WriteBinary, WriteSymmKey, WriteUserId,
+        },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
-        Be, ObjectId, ProcessSessionCmd, Se05X, SessionId, SymmKeyType,
+        Be, ObjectId, ProcessSessionCmd, Se05X, SymmKeyType,
     },
     t1::I2CForT1,
 };
@@ -429,5 +432,80 @@ impl PinData {
             .map_err(|_| Error::ReadFailed)?;
         let this = trussed::cbor_deserialize(&data).map_err(|_| Error::DeserializationFailed)?;
         Ok(Self { id, ..this })
+    }
+
+    pub fn delete<Twi: I2CForT1, D: DelayUs<u32>>(
+        self,
+        fs: &mut impl Filestore,
+        location: Location,
+        se050: &mut Se05X<Twi, D>,
+    ) -> Result<(), Error> {
+        let buf = &mut [0; 1024];
+        if let Some(protected_key_id) = self.protected_key_id {
+            se050.run_command(
+                &DeleteSecureObject {
+                    object_id: protected_key_id,
+                },
+                buf,
+            )?;
+            se050.run_command(
+                &WriteUserId {
+                    policy: None,
+                    max_attempts: None,
+                    object_id: protected_key_id,
+                    data: &hex!("01020304"),
+                },
+                buf,
+            )?;
+            let session_id = se050
+                .run_command(
+                    &CreateSession {
+                        object_id: protected_key_id,
+                    },
+                    buf,
+                )?
+                .session_id;
+            se050.run_command(
+                &ProcessSessionCmd {
+                    session_id,
+                    apdu: VerifySessionUserId {
+                        user_id: &hex!("01020304"),
+                    },
+                },
+                buf,
+            )?;
+            se050.run_command(
+                &ProcessSessionCmd {
+                    session_id,
+                    apdu: DeleteSecureObject {
+                        object_id: self.pin_aes_key_id,
+                    },
+                },
+                buf,
+            )?;
+            se050.run_command(
+                &ProcessSessionCmd {
+                    session_id,
+                    apdu: CloseSession {},
+                },
+                buf,
+            )?;
+            se050.run_command(
+                &DeleteSecureObject {
+                    object_id: protected_key_id,
+                },
+                buf,
+            )?;
+        } else {
+            se050.run_command(
+                &DeleteSecureObject {
+                    object_id: self.pin_aes_key_id,
+                },
+                buf,
+            )?;
+        }
+        fs.remove_file(&self.id.path(), location)
+            .map_err(|_| Error::WriteFailed)?;
+        Ok(())
     }
 }

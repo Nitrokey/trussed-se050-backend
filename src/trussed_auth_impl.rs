@@ -352,7 +352,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
             }
             AuthRequest::DeletePin(_req) => Err(trussed::Error::FunctionNotSupported),
             AuthRequest::DeleteAllPins(_req) => Err(trussed::Error::FunctionNotSupported),
-            AuthRequest::PinRetries(_req) => Err(trussed::Error::FunctionNotSupported),
+            AuthRequest::PinRetries(_req) => {
+                // TODO find a way to make this work
+                //
+                // It looks like reading with attestation can give access to this metadata
+                Ok(reply::PinRetries { retries: Some(3) }.into())
+            }
             AuthRequest::ResetAppKeys(_req) => Err(trussed::Error::FunctionNotSupported),
             AuthRequest::ResetAuthData(_req) => Err(trussed::Error::FunctionNotSupported),
         }
