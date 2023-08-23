@@ -1,0 +1,222 @@
+use crate::{generate_object_id, trussed_auth_impl::KEY_LEN};
+
+use super::{Error, Key, Salt, HASH_LEN, SALT_LEN};
+
+use embedded_hal::blocking::delay::DelayUs;
+use hmac::{Hmac, Mac};
+use se05x::{
+    se05x::{
+        commands::{GetRandom, WriteBinary, WriteSymmKey},
+        policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
+        Be, ObjectId, Se05X, SymmKeyType,
+    },
+    t1::I2CForT1,
+};
+use serde::{Deserialize, Serialize};
+use serde_byte_array::ByteArray;
+use sha2::Sha256;
+use trussed::{
+    platform::CryptoRng,
+    service::{Filestore, RngCore},
+    types::{Bytes, Location, PathBuf},
+};
+use trussed_auth::{PinId, MAX_PIN_LENGTH};
+
+fn app_salt_path() -> PathBuf {
+    const SALT_PATH: &str = "application_salt";
+
+    PathBuf::from(SALT_PATH)
+}
+
+pub(crate) fn get_app_salt<S: Filestore, R: CryptoRng + RngCore>(
+    fs: &mut S,
+    rng: &mut R,
+    location: Location,
+) -> Result<Salt, Error> {
+    if !fs.exists(&app_salt_path(), location) {
+        create_app_salt(fs, rng, location)
+    } else {
+        load_app_salt(fs, location)
+    }
+}
+
+pub(crate) fn delete_app_salt<S: Filestore>(
+    fs: &mut S,
+    location: Location,
+) -> Result<(), trussed::Error> {
+    if fs.exists(&app_salt_path(), location) {
+        fs.remove_file(&app_salt_path(), location)
+    } else {
+        Ok(())
+    }
+}
+
+fn create_app_salt<S: Filestore, R: CryptoRng + RngCore>(
+    fs: &mut S,
+    rng: &mut R,
+    location: Location,
+) -> Result<Salt, Error> {
+    let mut salt = Salt::default();
+    rng.fill_bytes(&mut *salt);
+    fs.write(&app_salt_path(), location, &*salt)
+        .map_err(|_| Error::WriteFailed)?;
+    Ok(salt)
+}
+
+fn load_app_salt<S: Filestore>(fs: &mut S, location: Location) -> Result<Salt, Error> {
+    fs.read(&app_salt_path(), location)
+        .map_err(|_| Error::ReadFailed)
+        .and_then(|b: Bytes<SALT_LEN>| (**b).try_into().map_err(|_| Error::ReadFailed))
+}
+
+pub fn expand_app_key(salt: &Salt, application_key: &Key, info: &[u8]) -> Key {
+    #[allow(clippy::expect_used)]
+    let mut hmac = Hmac::<Sha256>::new_from_slice(&**application_key)
+        .expect("Slice will always be of acceptable size");
+    hmac.update(&**salt);
+    hmac.update(&(info.len() as u64).to_be_bytes());
+    hmac.update(info);
+    let tmp: [_; HASH_LEN] = hmac.finalize().into_bytes().into();
+    tmp.into()
+}
+
+const PIN_KEY_LEN: usize = 16;
+type PinKey = ByteArray<PIN_KEY_LEN>;
+
+fn pin_len(pin: &[u8]) -> u8 {
+    const _: () = assert!(MAX_PIN_LENGTH <= u8::MAX as usize);
+    pin.len() as u8
+}
+
+pub fn expand_pin_key(salt: &Salt, application_key: &Key, id: PinId, pin: &[u8]) -> PinKey {
+    #[allow(clippy::expect_used)]
+    let mut hmac = Hmac::<Sha256>::new_from_slice(&**application_key)
+        .expect("Slice will always be of acceptable size");
+    hmac.update(&[u8::from(id)]);
+    hmac.update(&[pin_len(pin)]);
+    hmac.update(pin);
+    hmac.update(&**salt);
+    let tmp: [_; HASH_LEN] = hmac.finalize().into_bytes().into();
+    PinKey::new(tmp[..PIN_KEY_LEN].try_into().unwrap())
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct PinData {
+    #[serde(skip)]
+    id: PinId,
+    salt: Salt,
+    /// Id of the AES key authentication object for the PIN
+    pin_aes_key_id: ObjectId,
+    /// Id of the binary object protected by the PIN. None if the PIN protects nothing
+    protected_key_id: Option<ObjectId>,
+}
+
+impl PinData {
+    pub fn new<R: RngCore + CryptoRng>(id: PinId, rng: &mut R, derived_key: bool) -> Self {
+        use rand::Rng;
+        let salt = ByteArray::new(rng.gen());
+        let pin_aes_key_id = generate_object_id(rng);
+        let protected_key_id = derived_key.then(|| generate_object_id(rng));
+        Self {
+            id,
+            salt,
+            pin_aes_key_id,
+            protected_key_id,
+        }
+    }
+
+    pub fn save(&self, fs: &mut impl Filestore, location: Location) -> Result<(), Error> {
+        let data = trussed::cbor_serialize_bytes::<_, 256>(&self)
+            .map_err(|_| Error::SerializationFailed)?;
+        fs.write(&self.id.path(), location, &data)
+            .map_err(|_| Error::WriteFailed)?;
+        Ok(())
+    }
+
+    // Write the necessary objects to the SE050
+    pub fn create<Twi: I2CForT1, D: DelayUs<u32>>(
+        &self,
+        fs: &mut impl Filestore,
+        location: Location,
+        se050: &mut Se05X<Twi, D>,
+        app_key: &Key,
+        value: &[u8],
+        retries: Option<u8>,
+    ) -> Result<(), Error> {
+        let buf = &mut [0; 128];
+        let pin_aes_key_value = expand_pin_key(&self.salt, app_key, self.id, value);
+        self.save(fs, location)?;
+        let pin_aes_key_policy;
+        // So that temporary arrays are scoped to the function to please the borrow checker
+        let tmp1;
+        let tmp2;
+        if let Some(protected_key_id) = self.protected_key_id {
+            tmp1 = [
+                Policy {
+                    object_id: self.pin_aes_key_id,
+                    access_rule: ObjectAccessRule::from_flags(ObjectPolicyFlags::ALLOW_WRITE),
+                },
+                Policy {
+                    object_id: protected_key_id,
+                    access_rule: ObjectAccessRule::from_flags(ObjectPolicyFlags::ALLOW_DELETE),
+                },
+            ];
+            pin_aes_key_policy = &tmp1;
+
+            let protected_key_policy = &[
+                Policy {
+                    object_id: self.pin_aes_key_id,
+                    access_rule: ObjectAccessRule::from_flags(ObjectPolicyFlags::ALLOW_READ),
+                },
+                Policy {
+                    object_id: ObjectId::INVALID,
+                    access_rule: ObjectAccessRule::from_flags(ObjectPolicyFlags::ALLOW_DELETE),
+                },
+            ];
+            let key = se050.run_command(
+                &GetRandom {
+                    length: (KEY_LEN as u16).into(),
+                },
+                buf,
+            )?;
+            let key: Key = ByteArray::new(key.data.try_into().map_err(|_| Error::Se050)?);
+            se050.run_command(
+                &WriteBinary {
+                    object_id: protected_key_id,
+                    transient: false,
+                    policy: Some(PolicySet(protected_key_policy)),
+                    offset: Some(0.into()),
+                    file_length: Some((KEY_LEN as u16).into()),
+                    data: Some(&*key),
+                },
+                buf,
+            )?;
+        } else {
+            tmp2 = [
+                Policy {
+                    object_id: self.pin_aes_key_id,
+                    access_rule: ObjectAccessRule::from_flags(ObjectPolicyFlags::ALLOW_WRITE),
+                },
+                Policy {
+                    object_id: ObjectId::INVALID,
+                    access_rule: ObjectAccessRule::from_flags(ObjectPolicyFlags::ALLOW_DELETE),
+                },
+            ];
+            pin_aes_key_policy = &tmp2;
+        }
+        se050.run_command(
+            &WriteSymmKey {
+                transient: false,
+                is_auth: true,
+                key_type: SymmKeyType::Aes,
+                policy: Some(PolicySet(pin_aes_key_policy)),
+                max_attempts: retries.map(u16::from).map(Be::from),
+                object_id: self.pin_aes_key_id,
+                kek_id: None,
+                value: &*pin_aes_key_value,
+            },
+            buf,
+        )?;
+        Ok(())
+    }
+}
