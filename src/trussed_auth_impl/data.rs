@@ -111,6 +111,45 @@ pub(crate) struct PinData {
     protected_key_id: Option<ObjectId>,
 }
 
+fn simple_pin_policy(pin_aes_key_id: ObjectId) -> [Policy; 2] {
+    [
+        Policy {
+            object_id: pin_aes_key_id,
+            access_rule: ObjectAccessRule::from_flags(ObjectPolicyFlags::ALLOW_WRITE),
+        },
+        Policy {
+            object_id: ObjectId::INVALID,
+            access_rule: ObjectAccessRule::from_flags(ObjectPolicyFlags::ALLOW_DELETE),
+        },
+    ]
+}
+
+fn pin_policy_with_key(pin_aes_key_id: ObjectId, protected_key_id: ObjectId) -> [Policy; 2] {
+    [
+        Policy {
+            object_id: pin_aes_key_id,
+            access_rule: ObjectAccessRule::from_flags(ObjectPolicyFlags::ALLOW_WRITE),
+        },
+        Policy {
+            object_id: protected_key_id,
+            access_rule: ObjectAccessRule::from_flags(ObjectPolicyFlags::ALLOW_DELETE),
+        },
+    ]
+}
+
+fn key_policy(pin_aes_key_id: ObjectId, protected_key_id: ObjectId) -> [Policy; 2] {
+    [
+        Policy {
+            object_id: pin_aes_key_id,
+            access_rule: ObjectAccessRule::from_flags(ObjectPolicyFlags::ALLOW_READ),
+        },
+        Policy {
+            object_id: ObjectId::INVALID,
+            access_rule: ObjectAccessRule::from_flags(ObjectPolicyFlags::ALLOW_DELETE),
+        },
+    ]
+}
+
 impl PinData {
     pub fn new<R: RngCore + CryptoRng>(id: PinId, rng: &mut R, derived_key: bool) -> Self {
         use rand::Rng;
@@ -143,36 +182,19 @@ impl PinData {
         value: &[u8],
         retries: Option<u8>,
     ) -> Result<(), Error> {
+        self.save(fs, location)?;
+
         let buf = &mut [0; 128];
         let pin_aes_key_value = expand_pin_key(&self.salt, app_key, self.id, value);
-        self.save(fs, location)?;
+
         let pin_aes_key_policy;
         // So that temporary arrays are scoped to the function to please the borrow checker
-        let tmp1;
-        let tmp2;
+        let (tmp1, tmp2);
         if let Some(protected_key_id) = self.protected_key_id {
-            tmp1 = [
-                Policy {
-                    object_id: self.pin_aes_key_id,
-                    access_rule: ObjectAccessRule::from_flags(ObjectPolicyFlags::ALLOW_WRITE),
-                },
-                Policy {
-                    object_id: protected_key_id,
-                    access_rule: ObjectAccessRule::from_flags(ObjectPolicyFlags::ALLOW_DELETE),
-                },
-            ];
+            tmp1 = pin_policy_with_key(self.pin_aes_key_id, protected_key_id);
             pin_aes_key_policy = &tmp1;
 
-            let protected_key_policy = &[
-                Policy {
-                    object_id: self.pin_aes_key_id,
-                    access_rule: ObjectAccessRule::from_flags(ObjectPolicyFlags::ALLOW_READ),
-                },
-                Policy {
-                    object_id: ObjectId::INVALID,
-                    access_rule: ObjectAccessRule::from_flags(ObjectPolicyFlags::ALLOW_DELETE),
-                },
-            ];
+            let protected_key_policy = &key_policy(self.pin_aes_key_id, protected_key_id);
             let key = se050.run_command(
                 &GetRandom {
                     length: (KEY_LEN as u16).into(),
@@ -192,16 +214,7 @@ impl PinData {
                 buf,
             )?;
         } else {
-            tmp2 = [
-                Policy {
-                    object_id: self.pin_aes_key_id,
-                    access_rule: ObjectAccessRule::from_flags(ObjectPolicyFlags::ALLOW_WRITE),
-                },
-                Policy {
-                    object_id: ObjectId::INVALID,
-                    access_rule: ObjectAccessRule::from_flags(ObjectPolicyFlags::ALLOW_DELETE),
-                },
-            ];
+            tmp2 = simple_pin_policy(self.pin_aes_key_id);
             pin_aes_key_policy = &tmp2;
         }
         se050.run_command(
