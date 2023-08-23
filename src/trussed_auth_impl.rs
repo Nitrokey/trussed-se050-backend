@@ -290,7 +290,30 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 )?;
                 Ok(reply::SetPin {}.into())
             }
-            AuthRequest::SetPinWithKey(_req) => Err(trussed::Error::FunctionNotSupported),
+            AuthRequest::SetPinWithKey(request) => {
+                if fs.exists(&request.id.path(), self.metadata_location) {
+                    return Err(trussed::Error::FunctionFailed);
+                }
+                let app_key = self.get_app_key(client_id, global_fs, &mut backend_ctx.auth, rng)?;
+                let key =
+                    keystore.load_key(Secrecy::Secret, Some(Kind::Symmetric(32)), &request.key)?;
+                let key: Key = (&*key.material)
+                    .try_into()
+                    .map_err(|_| Error::DeserializationFailed)?;
+
+                PinData::create_with_key(
+                    request.id,
+                    fs,
+                    self.metadata_location,
+                    &mut self.se,
+                    &app_key,
+                    &request.pin,
+                    request.retries,
+                    rng,
+                    &key,
+                )?;
+                Ok(reply::SetPinWithKey {}.into())
+            }
             AuthRequest::ChangePin(_req) => Err(trussed::Error::FunctionNotSupported),
             AuthRequest::DeletePin(_req) => Err(trussed::Error::FunctionNotSupported),
             AuthRequest::DeleteAllPins(_req) => Err(trussed::Error::FunctionNotSupported),

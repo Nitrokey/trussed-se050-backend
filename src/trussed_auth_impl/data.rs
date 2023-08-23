@@ -232,4 +232,54 @@ impl PinData {
         )?;
         Ok(())
     }
+
+    // Write the necessary objects to the SE050
+    pub fn create_with_key<Twi: I2CForT1, D: DelayUs<u32>, R: RngCore + CryptoRng>(
+        id: PinId,
+        fs: &mut impl Filestore,
+        location: Location,
+        se050: &mut Se05X<Twi, D>,
+        app_key: &Key,
+        value: &[u8],
+        retries: Option<u8>,
+        rng: &mut R,
+        key: &Key,
+    ) -> Result<Self, Error> {
+        let this = Self::new(id, rng, true);
+        this.save(fs, location)?;
+
+        let buf = &mut [0; 128];
+        let pin_aes_key_value = expand_pin_key(&this.salt, app_key, this.id, value);
+
+        let protected_key_id = this.protected_key_id.unwrap();
+
+        let pin_aes_key_policy = &pin_policy_with_key(this.pin_aes_key_id, protected_key_id);
+
+        let protected_key_policy = &key_policy(this.pin_aes_key_id, protected_key_id);
+        se050.run_command(
+            &WriteBinary {
+                object_id: protected_key_id,
+                transient: false,
+                policy: Some(PolicySet(protected_key_policy)),
+                offset: Some(0.into()),
+                file_length: Some((KEY_LEN as u16).into()),
+                data: Some(&**key),
+            },
+            buf,
+        )?;
+        se050.run_command(
+            &WriteSymmKey {
+                transient: false,
+                is_auth: true,
+                key_type: SymmKeyType::Aes,
+                policy: Some(PolicySet(pin_aes_key_policy)),
+                max_attempts: retries.map(u16::from).map(Be::from),
+                object_id: this.pin_aes_key_id,
+                kek_id: None,
+                value: &*pin_aes_key_value,
+            },
+            buf,
+        )?;
+        Ok(this)
+    }
 }
