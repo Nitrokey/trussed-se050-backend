@@ -68,12 +68,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         }
     }
 
-    fn random_bytes(&mut self, count: usize) -> Result<trussed::Reply, trussed::Error> {
-        if count >= MAX_MESSAGE_LENGTH {
-            return Err(trussed::Error::MechanismParamInvalid);
-        }
-
+    fn enable(&mut self) -> Result<(), trussed::Error> {
         if !self.enabled {
+            debug!("Enabling");
             if let Err(e) = self.se.enable() {
                 self.failed_enable = Some(e);
             } else {
@@ -84,6 +81,14 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         if let Some(_e) = self.failed_enable {
             error!("Enabling failed: {:?}", _e);
             return Err(trussed::Error::FunctionFailed);
+        }
+
+        Ok(())
+    }
+
+    fn random_bytes(&mut self, count: usize) -> Result<trussed::Reply, trussed::Error> {
+        if count >= MAX_MESSAGE_LENGTH {
+            return Err(trussed::Error::MechanismParamInvalid);
         }
 
         let mut buf = [0; BUFFER_LEN];
@@ -125,6 +130,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
         request: &Request,
         resources: &mut trussed::service::ServiceResources<P>,
     ) -> Result<trussed::Reply, trussed::Error> {
+        self.enable()?;
         match request {
             Request::RandomBytes(request::RandomBytes { count }) => self.random_bytes(*count),
             _ => Err(trussed::Error::RequestNotAvailable),

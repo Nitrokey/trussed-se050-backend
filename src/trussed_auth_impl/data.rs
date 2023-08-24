@@ -10,11 +10,11 @@ use rand::Rng;
 use se05x::{
     se05x::{
         commands::{
-            CloseSession, CreateSession, DeleteSecureObject, GetRandom, ReadObject,
-            VerifySessionUserId, WriteBinary, WriteSymmKey, WriteUserId,
+            CheckObjectExists, CloseSession, CreateSession, DeleteSecureObject, GetRandom,
+            ReadIdList, ReadObject, VerifySessionUserId, WriteBinary, WriteSymmKey, WriteUserId,
         },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
-        Be, ObjectId, ProcessSessionCmd, Se05X, SymmKeyType,
+        Be, ObjectId, ProcessSessionCmd, Se05X, Se05XResult, SymmKeyType,
     },
     t1::I2CForT1,
 };
@@ -295,6 +295,7 @@ impl PinData {
         se050: &mut Se05X<Twi, D>,
         rng: &mut R,
     ) -> Result<bool, Error> {
+        debug_now!("Checking pin: {:?}", self.id);
         let buf = &mut [0; 1024];
         let pin_aes_key_value = expand_pin_key(&self.salt, app_key, self.id, value);
         let res = se050.run_command(
@@ -306,7 +307,10 @@ impl PinData {
         let session_id = res.session_id;
         let res = match se050.authenticate_aes128_session(session_id, &pin_aes_key_value, rng) {
             Ok(()) => Ok(true),
-            Err(_) => Ok(false),
+            Err(_err) => {
+                debug_now!("Failed to authenticate pin: {_err:?}");
+                Ok(false)
+            }
         };
         se050.run_command(
             &ProcessSessionCmd {
@@ -440,13 +444,37 @@ impl PinData {
         se050: &mut Se05X<Twi, D>,
     ) -> Result<(), Error> {
         let buf = &mut [0; 1024];
+        debug!("Deleting {self:02x?}");
         if let Some(protected_key_id) = self.protected_key_id {
-            se050.run_command(
-                &DeleteSecureObject {
-                    object_id: protected_key_id,
-                },
-                buf,
-            )?;
+            debug!("checking existence");
+            let exists = se050
+                .run_command(
+                    &CheckObjectExists {
+                        object_id: protected_key_id,
+                    },
+                    buf,
+                )
+                .map_err(|_err| {
+                    debug!("Failed existence check: {_err:?}");
+                    _err
+                })?
+                .result;
+            if exists == Se05XResult::Success {
+                debug!("Deleting key");
+                se050
+                    .run_command(
+                        &DeleteSecureObject {
+                            object_id: protected_key_id,
+                        },
+                        buf,
+                    )
+                    .map_err(|_err| {
+                        debug!("Failed deletion: {_err:?}");
+                        _err
+                    })?;
+            }
+
+            debug!("Writing userid ");
             se050.run_command(
                 &WriteUserId {
                     policy: None,
@@ -456,6 +484,7 @@ impl PinData {
                 },
                 buf,
             )?;
+            debug!("Creating session");
             let session_id = se050
                 .run_command(
                     &CreateSession {
@@ -464,6 +493,7 @@ impl PinData {
                     buf,
                 )?
                 .session_id;
+            debug!("Auth session");
             se050.run_command(
                 &ProcessSessionCmd {
                     session_id,
@@ -473,15 +503,22 @@ impl PinData {
                 },
                 buf,
             )?;
-            se050.run_command(
-                &ProcessSessionCmd {
-                    session_id,
-                    apdu: DeleteSecureObject {
-                        object_id: self.pin_aes_key_id,
+            debug!("Deleting auth");
+            se050
+                .run_command(
+                    &ProcessSessionCmd {
+                        session_id,
+                        apdu: DeleteSecureObject {
+                            object_id: self.pin_aes_key_id,
+                        },
                     },
-                },
-                buf,
-            )?;
+                    buf,
+                )
+                .map_err(|_err| {
+                    debug!("Failed to delete auth: {_err:?}");
+                    _err
+                })?;
+            debug!("Closing sess");
             se050.run_command(
                 &ProcessSessionCmd {
                     session_id,
@@ -489,6 +526,7 @@ impl PinData {
                 },
                 buf,
             )?;
+            debug!("Deleting userid");
             se050.run_command(
                 &DeleteSecureObject {
                     object_id: protected_key_id,
@@ -496,6 +534,7 @@ impl PinData {
                 buf,
             )?;
         } else {
+            debug!("Deleting simple");
             se050.run_command(
                 &DeleteSecureObject {
                     object_id: self.pin_aes_key_id,
@@ -503,20 +542,37 @@ impl PinData {
                 buf,
             )?;
         }
-        fs.remove_file(&self.id.path(), location)
-            .map_err(|_| Error::WriteFailed)?;
+
+        debug!("Removing file");
+        fs.remove_file(&self.id.path(), location).map_err(|_err| {
+            debug!("Removing file failed: {_err:?}");
+            Error::WriteFailed
+        })?;
         Ok(())
     }
 }
 
 fn delete_from_path<Twi: I2CForT1, D: DelayUs<u32>>(
-    path: &str,
+    path: &Path,
     fs: &mut impl Filestore,
     location: Location,
     se050: &mut Se05X<Twi, D>,
 ) -> Result<(), Error> {
-    let id = path.parse().map_err(|_| Error::DeserializationFailed)?;
-    let pin = PinData::load(id, fs, location)?;
+    debug!("Deleting {path:?}");
+    let path = path
+        .as_ref()
+        .strip_prefix(path.parent().as_deref().map(AsRef::as_ref).unwrap_or(""))
+        .unwrap_or(path.as_ref());
+    let path = path.strip_prefix("/").unwrap_or(path.as_ref());
+    debug!("Deleting stripped: {path:?}");
+    let id = path.parse().map_err(|_err| {
+        debug!("Parsing name failed: {_err:?}");
+        Error::DeserializationFailed
+    })?;
+    let pin = PinData::load(id, fs, location).map_err(|_err| {
+        debug!("Failed  loading: {_err:?}");
+        _err
+    })?;
     pin.delete(fs, location, se050)?;
     Ok(())
 }
@@ -526,16 +582,31 @@ pub(crate) fn delete_all_pins<Twi: I2CForT1, D: DelayUs<u32>>(
     location: Location,
     se050: &mut Se05X<Twi, D>,
 ) -> Result<(), Error> {
+    debug!(
+        "Listing objects {:02x?}",
+        se050.run_command(
+            &ReadIdList {
+                offset: 0.into(),
+                filter: se05x::se05x::SecureObjectFilter::All,
+            },
+            &mut [0; 1024],
+        )?
+    );
+
+    debug!("Deleting all pins");
     let Some((first, mut state)) = fs
         .read_dir_first(&path!(""), location, None)
         .map_err(|_| Error::ReadFailed)? else {
-        return Err(Error::ReadFailed);
+        return Ok(());
     };
-    delete_from_path(first.path().as_ref(), fs, location, se050)?;
+    debug!("ReadFirst");
+    delete_from_path(first.path(), fs, location, se050)?;
+    debug!("DeletedFirst");
 
     while let Some((entry, new_state)) = fs.read_dir_next(state).map_err(|_| Error::ReadFailed)? {
+        debug!("DeletingNext");
         state = new_state;
-        delete_from_path(entry.path().as_ref(), fs, location, se050)?;
+        delete_from_path(entry.path(), fs, location, se050)?;
     }
     Ok(())
 }

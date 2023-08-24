@@ -120,24 +120,27 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
     fn get_se050_salt(&mut self) -> Result<Salt, Error> {
         let buf = &mut [0; 32];
-        self.se.enable()?;
-        match self.se.run_command(
+        debug_now!("Attempting to read");
+        let tmp = self.se.run_command(
             &ReadObject {
                 object_id: GLOBAL_SALT_ID,
-                offset: Some(0.into()),
+                offset: None,
                 length: Some((SALT_LEN as u16).into()),
                 rsa_key_component: None,
             },
             buf,
-        ) {
+        );
+        debug_now!("Got {tmp:?}");
+        match tmp {
             Ok(res) => return Ok(res.data.try_into().map_err(|_| Error::ReadFailed)?),
-            Err(se05x::se05x::Error::Status(iso7816::Status::ConditionsOfUseNotSatisfied)) => {}
+            Err(se05x::se05x::Error::Status(iso7816::Status::IncorrectDataParameter)) => {}
             Err(_err) => {
                 debug!("Got unexpected error: {_err:?}");
                 return Err(Error::Se050);
             }
         };
 
+        debug_now!("Generating salt");
         // Salt was not found, need to generate, store it and return it.
         let salt: [u8; SALT_LEN] = self
             .se
@@ -149,19 +152,28 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             )?
             .data
             .try_into()
-            .map_err(|_| Error::ReadFailed)?;
+            .map_err(|_err| {
+                debug_now!("Random data failed: {_err:?}");
+                Error::ReadFailed
+            })?;
 
-        self.se.run_command(
-            &WriteBinary {
-                transient: false,
-                policy: None,
-                object_id: GLOBAL_SALT_ID,
-                offset: Some(0.into()),
-                file_length: Some((SALT_LEN as u16).into()),
-                data: Some(&salt),
-            },
-            buf,
-        )?;
+        debug_now!("Writing salt");
+        self.se
+            .run_command(
+                &WriteBinary {
+                    transient: false,
+                    policy: None,
+                    object_id: GLOBAL_SALT_ID,
+                    offset: Some(0.into()),
+                    file_length: Some((SALT_LEN as u16).into()),
+                    data: Some(&salt),
+                },
+                buf,
+            )
+            .map_err(|_err| {
+                debug_now!("Writing data failed: {_err:?}");
+                Error::ReadFailed
+            })?;
 
         Ok(salt.into())
     }
@@ -172,8 +184,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         ikm: Option<Bytes<MAX_HW_KEY_LEN>>,
         rng: &mut R,
     ) -> Result<&Hkdf<Sha256>, Error> {
+        debug_now!("Extracting key");
         let ikm: &[u8] = ikm.as_deref().map(|i| &**i).unwrap_or(&[]);
         let salt = self.get_global_salt(global_fs, rng)?;
+        debug_now!("Getting se050 salt");
         let se050_salt = self.get_se050_salt()?;
 
         let mut real_ikm: Bytes<{ SALT_LEN + MAX_HW_KEY_LEN }> =
@@ -203,6 +217,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         global_fs: &mut impl Filestore,
         rng: &mut R,
     ) -> Result<Key, Error> {
+        debug_now!("Generating app key");
         Ok(match &self.hw_key {
             HardwareKey::Extracted(okm) => Self::expand(okm, &client_id),
             HardwareKey::Raw(hw_k) => {
@@ -246,6 +261,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
         <trussed_auth::AuthExtension as trussed::serde_extensions::Extension>::Reply,
         trussed::Error,
     > {
+        self.enable()?;
+
+        debug_now!("Trussed Auth request: {request:?}");
         // FIXME: Have a real implementation from trussed
         let mut backend_path = core_ctx.path.clone();
         backend_path.push(&PathBuf::from(BACKEND_DIR));
@@ -269,7 +287,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 Ok(reply::CheckPin { success }.into())
             }
             AuthRequest::GetPinKey(request) => {
-                let pin_data = PinData::load(request.id, fs, self.metadata_location)?;
+                let pin_data =
+                    PinData::load(request.id, fs, self.metadata_location).map_err(|_err| {
+                        debug!("Failed to get pin data: {_err:?}");
+                        _err
+                    })?;
                 let app_key = self.get_app_key(client_id, global_fs, &mut backend_ctx.auth, rng)?;
                 let key = pin_data.check_and_get_key(&request.pin, &app_key, &mut self.se, rng)?;
                 let Some(material) = key else {
@@ -315,6 +337,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                     &request.pin,
                     request.retries,
                 )?;
+                debug_now!("Created pin");
                 Ok(reply::SetPin {}.into())
             }
             AuthRequest::SetPinWithKey(request) => {
@@ -364,7 +387,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 delete_all_pins(fs, self.metadata_location, &mut self.se)?;
                 Ok(reply::DeleteAllPins.into())
             }
-            AuthRequest::PinRetries(_req) => {
+            AuthRequest::PinRetries(request) => {
+                if !fs.exists(&request.id.path(), self.metadata_location) {
+                    Err(Error::NotFound)?;
+                }
                 // TODO find a way to make this work
                 //
                 // It looks like reading with attestation can give access to this metadata
