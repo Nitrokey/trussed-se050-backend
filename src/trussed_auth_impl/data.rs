@@ -5,7 +5,7 @@ use super::{Error, Key, Salt, HASH_LEN, SALT_LEN};
 use embedded_hal::blocking::delay::DelayUs;
 use hex_literal::hex;
 use hmac::{Hmac, Mac};
-use iso7816::Status;
+use littlefs2::path;
 use rand::Rng;
 use se05x::{
     se05x::{
@@ -24,7 +24,7 @@ use sha2::Sha256;
 use trussed::{
     platform::CryptoRng,
     service::{Filestore, RngCore},
-    types::{Bytes, Location, PathBuf},
+    types::{Bytes, Location, Path, PathBuf},
 };
 use trussed_auth::{PinId, MAX_PIN_LENGTH};
 
@@ -143,7 +143,7 @@ fn pin_policy_with_key(pin_aes_key_id: ObjectId, protected_key_id: ObjectId) -> 
     ]
 }
 
-fn key_policy(pin_aes_key_id: ObjectId, protected_key_id: ObjectId) -> [Policy; 2] {
+fn key_policy(pin_aes_key_id: ObjectId) -> [Policy; 2] {
     [
         Policy {
             object_id: pin_aes_key_id,
@@ -158,7 +158,6 @@ fn key_policy(pin_aes_key_id: ObjectId, protected_key_id: ObjectId) -> [Policy; 
 
 impl PinData {
     pub fn new<R: RngCore + CryptoRng>(id: PinId, rng: &mut R, derived_key: bool) -> Self {
-        use rand::Rng;
         let salt = ByteArray::new(rng.gen());
         let pin_aes_key_id = generate_object_id(rng);
         let protected_key_id = derived_key.then(|| generate_object_id(rng));
@@ -200,7 +199,7 @@ impl PinData {
             tmp1 = pin_policy_with_key(self.pin_aes_key_id, protected_key_id);
             pin_aes_key_policy = &tmp1;
 
-            let protected_key_policy = &key_policy(self.pin_aes_key_id, protected_key_id);
+            let protected_key_policy = &key_policy(self.pin_aes_key_id);
             let key = se050.run_command(
                 &GetRandom {
                     length: (KEY_LEN as u16).into(),
@@ -261,7 +260,7 @@ impl PinData {
 
         let pin_aes_key_policy = &pin_policy_with_key(this.pin_aes_key_id, protected_key_id);
 
-        let protected_key_policy = &key_policy(this.pin_aes_key_id, protected_key_id);
+        let protected_key_policy = &key_policy(this.pin_aes_key_id);
         se050.run_command(
             &WriteBinary {
                 object_id: protected_key_id,
@@ -508,4 +507,35 @@ impl PinData {
             .map_err(|_| Error::WriteFailed)?;
         Ok(())
     }
+}
+
+fn delete_from_path<Twi: I2CForT1, D: DelayUs<u32>>(
+    path: &str,
+    fs: &mut impl Filestore,
+    location: Location,
+    se050: &mut Se05X<Twi, D>,
+) -> Result<(), Error> {
+    let id = path.parse().map_err(|_| Error::DeserializationFailed)?;
+    let pin = PinData::load(id, fs, location)?;
+    pin.delete(fs, location, se050)?;
+    Ok(())
+}
+
+pub(crate) fn delete_all_pins<Twi: I2CForT1, D: DelayUs<u32>>(
+    fs: &mut impl Filestore,
+    location: Location,
+    se050: &mut Se05X<Twi, D>,
+) -> Result<(), Error> {
+    let Some((first, mut state)) = fs
+        .read_dir_first(&path!(""), location, None)
+        .map_err(|_| Error::ReadFailed)? else {
+        return Err(Error::ReadFailed);
+    };
+    delete_from_path(first.path().as_ref(), fs, location, se050)?;
+
+    while let Some((entry, new_state)) = fs.read_dir_next(state).map_err(|_| Error::ReadFailed)? {
+        state = new_state;
+        delete_from_path(entry.path().as_ref(), fs, location, se050)?;
+    }
+    Ok(())
 }

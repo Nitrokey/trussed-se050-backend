@@ -20,11 +20,12 @@ iso7816 = "0.1.1"
 hmac = "0.12.1"
 serde = { version = "1.0.185", default-features = false, features = ["derive"] }
 rand = { version = "0.8.5", default-features = false }
+littlefs2 = "0.4.0"
 
 [patch.crates-io]
 se05x = { git = "https://github.com/Nitrokey/se05x.git", rev = "5696f10dd0386b332b2e19bbbe59accdc9a647dc"} 
 trussed = { git = "https://github.com/Nitrokey/trussed", tag = "v0.1.0-nitrokey.12" }
-trussed-auth = { git = "https://github.com/Nitrokey/trussed-auth", rev = "e9caedb7419e80c4734db1259054cf629df6a066" }
+trussed-auth = { git = "https://github.com/Nitrokey/trussed-auth", rev = "98eb1e5c1283bb68e0a1ae2f6a7d3cdfc33c3697" }
 trussed-staging = { git = "https://github.com/Nitrokey/trussed-staging.git", branch = "hmacsha256p256" }
 iso7816 = { git = "https://github.com/sosthene-nitrokey/iso7816.git", rev = "160ca3bbd8e21ec4e4ee1e0748e1eaa53a45c97f"}
 

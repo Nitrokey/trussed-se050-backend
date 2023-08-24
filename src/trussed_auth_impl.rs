@@ -24,7 +24,9 @@ use trussed_auth::{MAX_HW_KEY_LEN, MAX_PIN_LENGTH};
 mod data;
 
 use crate::{
-    trussed_auth_impl::data::{expand_app_key, get_app_salt, PinData},
+    trussed_auth_impl::data::{
+        delete_all_pins, delete_app_salt, expand_app_key, get_app_salt, PinData,
+    },
     Se050Backend, BACKEND_DIR,
 };
 
@@ -34,6 +36,8 @@ pub(crate) const HASH_LEN: usize = 32;
 pub(crate) const KEY_LEN: usize = 32;
 pub(crate) type Key = ByteArray<KEY_LEN>;
 pub(crate) type Salt = ByteArray<SALT_LEN>;
+
+const AUTH_DIR: &str = "auth";
 
 #[derive(Clone)]
 pub enum HardwareKey {
@@ -245,13 +249,14 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
         // FIXME: Have a real implementation from trussed
         let mut backend_path = core_ctx.path.clone();
         backend_path.push(&PathBuf::from(BACKEND_DIR));
+        backend_path.push(&PathBuf::from(AUTH_DIR));
         let fs = &mut resources.filestore(backend_path);
         let global_fs = &mut resources.filestore(PathBuf::from(BACKEND_DIR));
         let rng = &mut resources.rng()?;
         let client_id = core_ctx.path.clone();
         let keystore = &mut resources.keystore(core_ctx)?;
 
-        use trussed_auth::{reply, AuthRequest};
+        use trussed_auth::{reply, request, AuthRequest};
         match request {
             AuthRequest::HasPin(request) => {
                 let has_pin = fs.exists(&request.id.path(), self.metadata_location);
@@ -350,16 +355,30 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 )?;
                 Ok(reply::ChangePin { success }.into())
             }
-            AuthRequest::DeletePin(_req) => Err(trussed::Error::FunctionNotSupported),
-            AuthRequest::DeleteAllPins(_req) => Err(trussed::Error::FunctionNotSupported),
+            AuthRequest::DeletePin(request) => {
+                let pin_data = PinData::load(request.id, fs, self.metadata_location)?;
+                pin_data.delete(fs, self.metadata_location, &mut self.se)?;
+                Ok(reply::DeletePin {}.into())
+            }
+            AuthRequest::DeleteAllPins(request::DeleteAllPins) => {
+                delete_all_pins(fs, self.metadata_location, &mut self.se)?;
+                Ok(reply::DeleteAllPins.into())
+            }
             AuthRequest::PinRetries(_req) => {
                 // TODO find a way to make this work
                 //
                 // It looks like reading with attestation can give access to this metadata
                 Ok(reply::PinRetries { retries: Some(3) }.into())
             }
-            AuthRequest::ResetAppKeys(_req) => Err(trussed::Error::FunctionNotSupported),
-            AuthRequest::ResetAuthData(_req) => Err(trussed::Error::FunctionNotSupported),
+            AuthRequest::ResetAppKeys(_req) => {
+                delete_app_salt(fs, self.metadata_location)?;
+                Ok(reply::ResetAppKeys.into())
+            }
+            AuthRequest::ResetAuthData(_req) => {
+                delete_app_salt(fs, self.metadata_location)?;
+                delete_all_pins(fs, self.metadata_location, &mut self.se)?;
+                Ok(reply::ResetAuthData.into())
+            }
         }
     }
 }
