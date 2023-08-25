@@ -26,7 +26,7 @@ use trussed::{
     service::{Filestore, RngCore},
     types::{Bytes, Location, Path, PathBuf},
 };
-use trussed_auth::{PinId, MAX_PIN_LENGTH};
+use trussed_auth::{request, PinId, MAX_PIN_LENGTH};
 
 fn app_salt_path() -> PathBuf {
     const SALT_PATH: &str = "application_salt";
@@ -239,6 +239,7 @@ impl PinData {
     }
 
     // Write the necessary objects to the SE050
+    #[allow(clippy::too_many_arguments)]
     pub fn create_with_key<Twi: I2CForT1, D: DelayUs<u32>, R: RngCore + CryptoRng>(
         id: PinId,
         fs: &mut impl Filestore,
@@ -378,14 +379,13 @@ impl PinData {
         &mut self,
         se050: &mut Se05X<Twi, D>,
         app_key: &Key,
-        old_value: &[u8],
-        new_value: &[u8],
+        request: &request::ChangePin,
         fs: &mut impl Filestore,
         location: Location,
         rng: &mut R,
     ) -> Result<bool, Error> {
         let buf = &mut [0; 1024];
-        let pin_aes_key_value = expand_pin_key(&self.salt, app_key, self.id, old_value);
+        let pin_aes_key_value = expand_pin_key(&self.salt, app_key, self.id, &request.old_pin);
         let res = se050.run_command(
             &CreateSession {
                 object_id: self.pin_aes_key_id,
@@ -399,7 +399,7 @@ impl PinData {
         };
 
         self.salt = ByteArray::new(rng.gen());
-        let new_pin_aes_key_value = expand_pin_key(&self.salt, app_key, self.id, new_value);
+        let new_pin_aes_key_value = expand_pin_key(&self.salt, app_key, self.id, &request.new_pin);
         se050.run_command(
             &ProcessSessionCmd {
                 session_id,

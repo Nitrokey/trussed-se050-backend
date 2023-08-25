@@ -370,8 +370,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 let success = pin_data.update(
                     &mut self.se,
                     &app_key,
-                    &request.old_pin,
-                    &request.new_pin,
+                    request,
                     fs,
                     self.metadata_location,
                     rng,
