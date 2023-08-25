@@ -3,16 +3,10 @@
 use embedded_hal::blocking::delay::DelayUs;
 use rand::{CryptoRng, Rng, RngCore};
 use se05x::{
-    se05x::{commands::GetRandom, ObjectId, Se05X},
+    se05x::{ObjectId, Se05X},
     t1::I2CForT1,
 };
-use trussed::{
-    api::{reply, request, Request},
-    backend::Backend,
-    config::MAX_MESSAGE_LENGTH,
-    types::{Location, Message},
-    Bytes,
-};
+use trussed::{types::Location, Bytes};
 
 #[macro_use]
 extern crate delog;
@@ -22,8 +16,9 @@ mod trussed_auth_impl;
 use trussed_auth::MAX_HW_KEY_LEN;
 use trussed_auth_impl::{AuthContext, HardwareKey};
 
+mod core_api;
+
 /// Need overhead for TLV + SW bytes
-const BUFFER_LEN: usize = 2048;
 const BACKEND_DIR: &str = "se050-bak";
 
 pub enum Se05xLocation {
@@ -83,57 +78,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
         Ok(())
     }
-
-    fn random_bytes(&mut self, count: usize) -> Result<trussed::Reply, trussed::Error> {
-        if count >= MAX_MESSAGE_LENGTH {
-            return Err(trussed::Error::MechanismParamInvalid);
-        }
-
-        let mut buf = [0; BUFFER_LEN];
-        let res = self
-            .se
-            .run_command(
-                &GetRandom {
-                    length: (count as u16).into(),
-                },
-                &mut buf,
-            )
-            .map_err(|_err| {
-                error!("Failed to get random: {:?}", _err);
-                trussed::Error::FunctionFailed
-            })?;
-        if res.data.len() != count {
-            error!("Bad random length");
-            return Err(trussed::Error::FunctionFailed);
-        }
-        Ok(reply::RandomBytes {
-            bytes: Message::from_slice(res.data).unwrap(),
-        }
-        .into())
-    }
 }
 
 #[derive(Default, Debug)]
 pub struct Context {
     auth: AuthContext,
-}
-
-impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
-    type Context = Context;
-
-    fn request<P: trussed::Platform>(
-        &mut self,
-        _core_ctx: &mut trussed::types::CoreContext,
-        _backend_ctx: &mut Self::Context,
-        request: &Request,
-        _resources: &mut trussed::service::ServiceResources<P>,
-    ) -> Result<trussed::Reply, trussed::Error> {
-        self.enable()?;
-        match request {
-            Request::RandomBytes(request::RandomBytes { count }) => self.random_bytes(*count),
-            _ => Err(trussed::Error::RequestNotAvailable),
-        }
-    }
 }
 
 fn generate_object_id<R: RngCore + CryptoRng>(rng: &mut R) -> ObjectId {
