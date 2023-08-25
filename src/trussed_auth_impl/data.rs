@@ -11,7 +11,7 @@ use se05x::{
     se05x::{
         commands::{
             CheckObjectExists, CloseSession, CreateSession, DeleteSecureObject, GetRandom,
-            ReadIdList, ReadObject, VerifySessionUserId, WriteBinary, WriteSymmKey, WriteUserId,
+            ReadObject, VerifySessionUserId, WriteBinary, WriteSymmKey, WriteUserId,
         },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
         Be, ObjectId, ProcessSessionCmd, Se05X, Se05XResult, SymmKeyType,
@@ -563,7 +563,7 @@ fn delete_from_path<Twi: I2CForT1, D: DelayUs<u32>>(
         .as_ref()
         .strip_prefix(path.parent().as_deref().map(AsRef::as_ref).unwrap_or(""))
         .unwrap_or(path.as_ref());
-    let path = path.strip_prefix("/").unwrap_or(path.as_ref());
+    let path = path.strip_prefix('/').unwrap_or(path.as_ref());
     debug!("Deleting stripped: {path:?}");
     let id = path.parse().map_err(|_err| {
         debug!("Parsing name failed: {_err:?}");
@@ -582,20 +582,9 @@ pub(crate) fn delete_all_pins<Twi: I2CForT1, D: DelayUs<u32>>(
     location: Location,
     se050: &mut Se05X<Twi, D>,
 ) -> Result<(), Error> {
-    debug!(
-        "Listing objects {:02x?}",
-        se050.run_command(
-            &ReadIdList {
-                offset: 0.into(),
-                filter: se05x::se05x::SecureObjectFilter::All,
-            },
-            &mut [0; 1024],
-        )?
-    );
-
     debug!("Deleting all pins");
     let Some((first, mut state)) = fs
-        .read_dir_first(&path!(""), location, None)
+        .read_dir_first(path!(""), location, None)
         .map_err(|_| Error::ReadFailed)? else {
         return Ok(());
     };

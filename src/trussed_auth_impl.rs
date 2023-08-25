@@ -16,10 +16,10 @@ use trussed::{
     platform::CryptoRng,
     serde_extensions::ExtensionImpl,
     service::{Filestore, Keystore, RngCore},
-    types::{ui::Status, Location, PathBuf},
+    types::{Location, PathBuf},
     Bytes,
 };
-use trussed_auth::{MAX_HW_KEY_LEN, MAX_PIN_LENGTH};
+use trussed_auth::MAX_HW_KEY_LEN;
 
 mod data;
 
@@ -132,7 +132,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         );
         debug_now!("Got {tmp:?}");
         match tmp {
-            Ok(res) => return Ok(res.data.try_into().map_err(|_| Error::ReadFailed)?),
+            Ok(res) => return res.data.try_into().map_err(|_| Error::ReadFailed),
             Err(se05x::se05x::Error::Status(iso7816::Status::IncorrectDataParameter)) => {}
             Err(_err) => {
                 debug!("Got unexpected error: {_err:?}");

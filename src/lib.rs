@@ -1,7 +1,5 @@
 #![no_std]
 
-use core::ops::Deref;
-
 use embedded_hal::blocking::delay::DelayUs;
 use rand::{CryptoRng, Rng, RngCore};
 use se05x::{
@@ -125,10 +123,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
 
     fn request<P: trussed::Platform>(
         &mut self,
-        core_ctx: &mut trussed::types::CoreContext,
-        backend_ctx: &mut Self::Context,
+        _core_ctx: &mut trussed::types::CoreContext,
+        _backend_ctx: &mut Self::Context,
         request: &Request,
-        resources: &mut trussed::service::ServiceResources<P>,
+        _resources: &mut trussed::service::ServiceResources<P>,
     ) -> Result<trussed::Reply, trussed::Error> {
         self.enable()?;
         match request {
