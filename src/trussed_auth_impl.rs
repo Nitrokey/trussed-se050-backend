@@ -130,7 +130,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             },
             buf,
         );
-        debug_now!("Got {tmp:?}");
         match tmp {
             Ok(res) => return res.data.try_into().map_err(|_| Error::ReadFailed),
             Err(se05x::se05x::Error::Status(iso7816::Status::IncorrectDataParameter)) => {}
@@ -341,9 +340,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 Ok(reply::SetPin {}.into())
             }
             AuthRequest::SetPinWithKey(request) => {
-                if fs.exists(&request.id.path(), self.metadata_location) {
-                    return Err(trussed::Error::FunctionFailed);
-                }
                 let app_key = self.get_app_key(client_id, global_fs, &mut backend_ctx.auth, rng)?;
                 let key =
                     keystore.load_key(Secrecy::Secret, Some(Kind::Symmetric(32)), &request.key)?;
