@@ -267,7 +267,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
         let global_fs = &mut resources.filestore(PathBuf::from(BACKEND_DIR));
         let rng = &mut resources.rng()?;
         let client_id = core_ctx.path.clone();
-        let keystore = &mut resources.keystore(core_ctx)?;
+        let keystore = &mut resources.keystore(core_ctx.path.clone())?;
 
         use trussed_auth::{reply, request, AuthRequest};
         match request {
