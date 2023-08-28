@@ -22,6 +22,7 @@ serde = { version = "1.0.185", default-features = false, features = ["derive"] }
 rand = { version = "0.8.5", default-features = false }
 littlefs2 = "0.4.0"
 cbor-smol = "0.4.0"
+serde_bytes = { version = "0.11.12", default-features = false }
 
 [patch.crates-io]
 se05x = { git = "https://github.com/Nitrokey/se05x.git", rev = "bf696ee99bc893dda385dbbf47e0cdab9c58aba6"} 

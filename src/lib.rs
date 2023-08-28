@@ -40,6 +40,8 @@ pub struct Se050Backend<Twi, D> {
     enabled: bool,
     failed_enable: Option<se05x::se05x::Error>,
     metadata_location: Location,
+    /// Contains metadata for volatile keys that are not deleted.
+    key_metadata_location: Location,
     hw_key: HardwareKey,
 }
 
@@ -47,6 +49,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     pub fn new(
         se: Se05X<Twi, D>,
         metadata_location: Location,
+        key_metadata_location: Location,
         hardware_key: Option<Bytes<{ MAX_HW_KEY_LEN }>>,
     ) -> Self {
         Se050Backend {
@@ -54,6 +57,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             enabled: false,
             failed_enable: None,
             metadata_location,
+            key_metadata_location,
             hw_key: match hardware_key {
                 None => HardwareKey::None,
                 Some(k) => HardwareKey::Raw(k),
