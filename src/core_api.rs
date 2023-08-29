@@ -33,9 +33,12 @@ const CORE_DIR: &str = "se050-core";
 /// Persistent metadata for
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum PersistentMetadata {
+    /// The key is a standard non-transient key
     None,
-    Standard,
-    Rsa { intermediary: ObjectId },
+    /// The key is a volatile (transient) ECC key
+    StandardVolatile,
+    /// The key is a volatile RSA key thas therefore is actually not transient and is protected by an intemediary AES key.
+    RsaVolatile { intermediary: ObjectId },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -130,7 +133,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             cbor_smol::cbor_deserialize(material).or(Err(Error::FunctionFailed))?;
         if !matches!(
             material.metatada,
-            PersistentMetadata::None | PersistentMetadata::Standard
+            PersistentMetadata::None | PersistentMetadata::StandardVolatile
         ) {
             return Err(Error::FunctionFailed);
         }
@@ -245,7 +248,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let metadata_material = cbor_serialize(
             &PersistentKeyMaterial {
                 object_id: real_key_id,
-                metatada: PersistentMetadata::Rsa {
+                metatada: PersistentMetadata::RsaVolatile {
                     intermediary: intermediary_id,
                 },
             },
@@ -318,7 +321,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let metadata_material = cbor_serialize(
             &PersistentKeyMaterial {
                 object_id,
-                metatada: PersistentMetadata::Standard,
+                metatada: PersistentMetadata::StandardVolatile,
             },
             buf,
         )
