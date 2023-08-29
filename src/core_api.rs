@@ -20,7 +20,7 @@ use trussed::{
     key::{Kind, Secrecy},
     service::Keystore,
     types::{KeyId, Location, Mechanism, Message},
-    Bytes,
+    Bytes, Error,
 };
 
 use crate::{generate_object_id, Context, Se050Backend, BACKEND_DIR};
@@ -67,9 +67,9 @@ struct VolatileRsaKey {
 }
 
 impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
-    fn random_bytes(&mut self, count: usize) -> Result<trussed::Reply, trussed::Error> {
+    fn random_bytes(&mut self, count: usize) -> Result<trussed::Reply, Error> {
         if count >= MAX_MESSAGE_LENGTH {
-            return Err(trussed::Error::MechanismParamInvalid);
+            return Err(Error::MechanismParamInvalid);
         }
 
         let mut buf = [0; BUFFER_LEN];
@@ -83,11 +83,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             )
             .map_err(|_err| {
                 error!("Failed to get random: {:?}", _err);
-                trussed::Error::FunctionFailed
+                Error::FunctionFailed
             })?;
         if res.data.len() != count {
             error!("Bad random length");
-            return Err(trussed::Error::FunctionFailed);
+            return Err(Error::FunctionFailed);
         }
         Ok(reply::RandomBytes {
             bytes: Message::from_slice(res.data).unwrap(),
@@ -100,7 +100,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         req: &request::GenerateKey,
         keystore: &mut impl Keystore,
         rng: &mut R,
-    ) -> Result<reply::GenerateKey, trussed::Error> {
+    ) -> Result<reply::GenerateKey, Error> {
         match req.attributes.persistence {
             Location::Volatile => self.generate_volatile_key(req, keystore, rng),
             Location::Internal | Location::External => {
@@ -115,7 +115,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         size: u16,
         kind: Kind,
         rng: &mut R,
-    ) -> Result<reply::GenerateKey, trussed::Error> {
+    ) -> Result<reply::GenerateKey, Error> {
         let buf = &mut [0; 1024];
         let real_key_id = generate_object_id(rng);
         let intermediary_id = generate_object_id(rng);
@@ -150,10 +150,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let key: [u8; 16] = self
             .se
             .run_command(&GetRandom { length: 16.into() }, buf)
-            .or(Err(trussed::Error::FunctionFailed))?
+            .or(Err(Error::FunctionFailed))?
             .data
             .try_into()
-            .or(Err(trussed::Error::FunctionFailed))?;
+            .or(Err(Error::FunctionFailed))?;
         self.se
             .run_command(
                 &WriteSymmKey::builder()
@@ -165,7 +165,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     .build(),
                 buf,
             )
-            .or(Err(trussed::Error::FunctionFailed))?;
+            .or(Err(Error::FunctionFailed))?;
         self.se
             .run_command(
                 &WriteRsaKey::builder()
@@ -176,7 +176,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     .build(),
                 buf,
             )
-            .or(Err(trussed::Error::FunctionFailed))?;
+            .or(Err(Error::FunctionFailed))?;
 
         let metadata_material = cbor_serialize(
             &PersistentKeyMaterial {
@@ -187,7 +187,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             },
             buf,
         )
-        .or(Err(trussed::Error::CborError))?;
+        .or(Err(Error::CborError))?;
         let metadata_id = keystore.store_key(
             self.key_metadata_location,
             Secrecy::Secret,
@@ -204,7 +204,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             },
             buf,
         )
-        .or(Err(trussed::Error::CborError))?;
+        .or(Err(Error::CborError))?;
         let key = keystore.store_key(Location::Volatile, Secrecy::Secret, kind, key_material)?;
         Ok(reply::GenerateKey { key })
     }
@@ -214,7 +214,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         req: &request::GenerateKey,
         keystore: &mut impl Keystore,
         rng: &mut R,
-    ) -> Result<reply::GenerateKey, trussed::Error> {
+    ) -> Result<reply::GenerateKey, Error> {
         let kind = match req.mechanism {
             Mechanism::Ed255 => Kind::Ed255,
             Mechanism::X255 => Kind::X255,
@@ -239,16 +239,16 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Mechanism::Ed255 => self
                 .se
                 .run_command(&generate_ed255(object_id, true), buf)
-                .or(Err(trussed::Error::FunctionFailed))?,
+                .or(Err(Error::FunctionFailed))?,
             Mechanism::X255 => self
                 .se
                 .run_command(&generate_ed255(object_id, true), buf)
-                .or(Err(trussed::Error::FunctionFailed))?,
+                .or(Err(Error::FunctionFailed))?,
             // TODO First write curve somehow
             Mechanism::P256 => self
                 .se
                 .run_command(&generate_ed255(object_id, true), buf)
-                .or(Err(trussed::Error::FunctionFailed))?,
+                .or(Err(Error::FunctionFailed))?,
             _ => unreachable!(),
         }
         let metadata_material = cbor_serialize(
@@ -258,7 +258,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             },
             buf,
         )
-        .or(Err(trussed::Error::CborError))?;
+        .or(Err(Error::CborError))?;
         let metadata_id = keystore.store_key(
             req.attributes.persistence,
             Secrecy::Secret,
@@ -268,20 +268,20 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let exported = self
             .se
             .run_command(&ExportObject::builder().object_id(object_id).build(), buf)
-            .or(Err(trussed::Error::FunctionFailed))?
+            .or(Err(Error::FunctionFailed))?
             .data;
         let material: Bytes<1024> = trussed::cbor_serialize_bytes(&VolatileKeyMaterialRef {
             object_id,
             persistent_metadata: metadata_id,
             exported_material: exported,
         })
-        .or(Err(trussed::Error::FunctionFailed))?;
+        .or(Err(Error::FunctionFailed))?;
         let key = keystore
             .store_key(Location::Volatile, Secrecy::Secret, kind, &material)
-            .or(Err(trussed::Error::FunctionFailed))?;
+            .or(Err(Error::FunctionFailed))?;
 
         // Remove any data from the transient storage
-        self.se.enable().or(Err(trussed::Error::FunctionFailed))?;
+        self.se.enable().or(Err(Error::FunctionFailed))?;
         Ok(reply::GenerateKey { key })
     }
 
@@ -290,7 +290,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         req: &request::GenerateKey,
         keystore: &mut impl Keystore,
         rng: &mut R,
-    ) -> Result<reply::GenerateKey, trussed::Error> {
+    ) -> Result<reply::GenerateKey, Error> {
         let buf = &mut [0; 1024];
         let object_id = generate_object_id(rng);
 
@@ -298,31 +298,31 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Mechanism::Ed255 => self
                 .se
                 .run_command(&generate_ed255(object_id, false), buf)
-                .or(Err(trussed::Error::FunctionFailed))?,
+                .or(Err(Error::FunctionFailed))?,
 
             Mechanism::X255 => self
                 .se
                 .run_command(&generate_x255(object_id, false), buf)
-                .or(Err(trussed::Error::FunctionFailed))?,
+                .or(Err(Error::FunctionFailed))?,
 
             // TODO First write curve somehow
             Mechanism::P256 => self
                 .se
                 .run_command(&generate_p256(object_id, false), buf)
-                .or(Err(trussed::Error::FunctionFailed))?,
-            Mechanism::P256Prehashed => return Err(trussed::Error::MechanismParamInvalid),
+                .or(Err(Error::FunctionFailed))?,
+            Mechanism::P256Prehashed => return Err(Error::MechanismParamInvalid),
             Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => self
                 .se
                 .run_command(&generate_rsa(object_id, 2048), buf)
-                .or(Err(trussed::Error::FunctionFailed))?,
+                .or(Err(Error::FunctionFailed))?,
             Mechanism::Rsa3072Raw | Mechanism::Rsa3072Pkcs1v15 => self
                 .se
                 .run_command(&generate_rsa(object_id, 3072), buf)
-                .or(Err(trussed::Error::FunctionFailed))?,
+                .or(Err(Error::FunctionFailed))?,
             Mechanism::Rsa4096Raw | Mechanism::Rsa4096Pkcs1v15 => self
                 .se
                 .run_command(&generate_rsa(object_id, 4096), buf)
-                .or(Err(trussed::Error::FunctionFailed))?,
+                .or(Err(Error::FunctionFailed))?,
             // Other mechanisms are filtered through the `supported` function
             _ => unreachable!(),
         }
@@ -348,7 +348,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             },
             buf,
         )
-        .or(Err(trussed::Error::CborError))?;
+        .or(Err(Error::CborError))?;
         let key =
             keystore.store_key(req.attributes.persistence, Secrecy::Secret, kind, material)?;
         Ok(reply::GenerateKey { key })
@@ -415,7 +415,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
         _backend_ctx: &mut Self::Context,
         request: &Request,
         resources: &mut trussed::service::ServiceResources<P>,
-    ) -> Result<trussed::Reply, trussed::Error> {
+    ) -> Result<trussed::Reply, Error> {
         self.enable()?;
         debug_now!("Trussed Auth request: {request:?}");
 
@@ -452,7 +452,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
             Request::Verify(req) if supported(req.mechanism) => todo!(),
             Request::WrapKey(req) if supported(req.mechanism) => todo!(),
 
-            _ => return Err(trussed::Error::RequestNotAvailable),
+            _ => return Err(Error::RequestNotAvailable),
         })
     }
 }
