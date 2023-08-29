@@ -730,6 +730,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
             Request::DeserializeKey(req) if supported(req.mechanism) => todo!(),
             Request::Encrypt(req) if supported(req.mechanism) => todo!(),
             Request::Delete(request::Delete { key }) => self.delete(key, se050_keystore)?.into(),
+            Request::Clear(_req) => todo!(),
             Request::DeleteAllKeys(_req) => todo!(),
             Request::Exists(req) if supported(req.mechanism) => todo!(),
             Request::GenerateKey(req) if supported(req.mechanism) => {
@@ -742,7 +743,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
             Request::UnwrapKey(req) if supported(req.mechanism) => todo!(),
             Request::Verify(req) if supported(req.mechanism) => todo!(),
             Request::WrapKey(req) if supported(req.mechanism) => todo!(),
-
             _ => return Err(Error::RequestNotAvailable),
         })
     }
