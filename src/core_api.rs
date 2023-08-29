@@ -6,7 +6,9 @@ use littlefs2::path::PathBuf;
 use rand::{CryptoRng, RngCore};
 use se05x::{
     se05x::{
-        commands::{ExportObject, GetRandom, WriteEcKey, WriteRsaKey, WriteSymmKey},
+        commands::{
+            DeleteSecureObject, ExportObject, GetRandom, WriteEcKey, WriteRsaKey, WriteSymmKey,
+        },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
         EcCurve, ObjectId, P1KeyType, SymmKeyType,
     },
@@ -93,6 +95,68 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             bytes: Message::from_slice(res.data).unwrap(),
         }
         .into())
+    }
+
+    fn delete<R: CryptoRng + RngCore>(
+        &mut self,
+        key: &KeyId,
+        keystore: &mut impl Keystore,
+        rng: &mut R,
+    ) -> Result<reply::Delete, Error> {
+        // If the key is not found in the se050 keystore, pass the call to the core API
+        // The backend only stores secret keys (even public keys are actually the secret part)
+        let loaded_key = keystore
+            .load_key(Secrecy::Secret, None, key)
+            .or(Err(Error::MechanismNotAvailable))?;
+        match loaded_key.kind {
+            Kind::Ed255 | Kind::X255 | Kind::P256 => {
+                self.delete_ecc_key(&loaded_key.material, keystore, key, rng)
+            }
+            Kind::Rsa2048 | Kind::Rsa3072 | Kind::Rsa4096 => {
+                self.delete_rsa_key(&loaded_key.material, keystore, key, rng)
+            }
+            _ => Err(Error::MechanismInvalid),
+        }
+    }
+
+    fn delete_ecc_key<R: CryptoRng + RngCore>(
+        &mut self,
+        material: &[u8],
+        keystore: &mut impl Keystore,
+        key: &KeyId,
+        rng: &mut R,
+    ) -> Result<reply::Delete, Error> {
+        let material: PersistentKeyMaterial =
+            cbor_smol::cbor_deserialize(material).or(Err(Error::FunctionFailed))?;
+        if !matches!(
+            material.metatada,
+            PersistentMetadata::None | PersistentMetadata::Standard
+        ) {
+            return Err(Error::FunctionFailed);
+        }
+
+        let buf = &mut [0; 1024];
+        self.se
+            .run_command(
+                &DeleteSecureObject {
+                    object_id: material.object_id,
+                },
+                buf,
+            )
+            .or(Err(Error::FunctionFailed))?;
+        Ok(reply::Delete {
+            success: keystore.delete_key(key),
+        })
+    }
+
+    fn delete_rsa_key<R: CryptoRng + RngCore>(
+        &mut self,
+        material: &[u8],
+        keystore: &mut impl Keystore,
+        key: &KeyId,
+        rng: &mut R,
+    ) -> Result<reply::Delete, Error> {
+        todo!()
     }
 
     fn generate_key<R: CryptoRng + RngCore>(
@@ -432,13 +496,17 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
         let _core_keystore = &mut resources.keystore(core_ctx.path.clone())?;
 
         Ok(match request {
-            Request::RandomBytes(request::RandomBytes { count }) => self.random_bytes(*count)?,
+            Request::RandomBytes(request::RandomBytes { count }) => {
+                self.random_bytes(*count)?.into()
+            }
             Request::Agree(req) if supported(req.mechanism) => todo!(),
             Request::Decrypt(req) if supported(req.mechanism) => todo!(),
             Request::DeriveKey(req) if supported(req.mechanism) => todo!(),
             Request::DeserializeKey(req) if supported(req.mechanism) => todo!(),
             Request::Encrypt(req) if supported(req.mechanism) => todo!(),
-            Request::Delete(_req) => todo!(),
+            Request::Delete(request::Delete { key }) => {
+                self.delete(key, se050_keystore, rng)?.into()
+            }
             Request::DeleteAllKeys(_req) => todo!(),
             Request::Exists(req) if supported(req.mechanism) => todo!(),
             Request::GenerateKey(req) if supported(req.mechanism) => {
