@@ -581,9 +581,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
         let _core_keystore = &mut resources.keystore(core_ctx.path.clone())?;
 
         Ok(match request {
-            Request::RandomBytes(request::RandomBytes { count }) => {
-                self.random_bytes(*count)?.into()
-            }
+            Request::RandomBytes(request::RandomBytes { count }) => self.random_bytes(*count)?,
             Request::Agree(req) if supported(req.mechanism) => todo!(),
             Request::Decrypt(req) if supported(req.mechanism) => todo!(),
             Request::DeriveKey(req) if supported(req.mechanism) => todo!(),
