@@ -9,8 +9,8 @@ use se05x::{
     se05x::{
         commands::{
             CheckObjectExists, CloseSession, CreateSession, DeleteSecureObject,
-            EcdhGenerateSharedSecret, ExportObject, GetRandom, VerifySessionUserId, WriteEcKey,
-            WriteRsaKey, WriteSymmKey, WriteUserId,
+            EcdhGenerateSharedSecret, ExportObject, GetRandom, ImportObject, VerifySessionUserId,
+            WriteEcKey, WriteRsaKey, WriteSymmKey, WriteUserId,
         },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
         EcCurve, ObjectId, P1KeyType, ProcessSessionCmd, Se05XResult, SymmKeyType,
@@ -536,6 +536,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let priv_key = se050_keystore.load_key(Secrecy::Secret, Some(kind), &req.private_key)?;
         let priv_key: PersistentKeyMaterial =
             cbor_smol::cbor_deserialize(&priv_key.material).or(Err(Error::CborError))?;
+        if !matches!(priv_key.metatada, PersistentMetadata::None) {
+            return Err(Error::FunctionFailed);
+        }
 
         let pub_key = core_keystore.load_key(Secrecy::Public, Some(kind), &req.public_key)?;
 
@@ -580,7 +583,64 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         se050_keystore: &mut impl Keystore,
         core_keystore: &mut impl Keystore,
     ) -> Result<reply::Agree, Error> {
-        todo!()
+        let kind = match req.mechanism {
+            Mechanism::P256 => Kind::P256,
+            Mechanism::X255 => Kind::X255,
+            _ => return Err(Error::MechanismParamInvalid),
+        };
+
+        let priv_key = se050_keystore.load_key(Secrecy::Secret, Some(kind), &req.private_key)?;
+        let priv_key: VolatileKeyMaterialRef =
+            cbor_smol::cbor_deserialize(&priv_key.material).or(Err(Error::CborError))?;
+
+        let pub_key = core_keystore.load_key(Secrecy::Public, Some(kind), &req.public_key)?;
+
+        let buf = &mut [0; 1024];
+
+        self.se
+            .run_command(
+                &ImportObject::builder()
+                    .object_id(priv_key.object_id)
+                    .serialized_object(priv_key.exported_material)
+                    .build(),
+                buf,
+            )
+            .or(Err(Error::FunctionFailed))?;
+
+        let shared_secret = self
+            .se
+            .run_command(
+                &EcdhGenerateSharedSecret {
+                    key_id: priv_key.object_id,
+                    public_key: &pub_key.material,
+                },
+                buf,
+            )
+            .or(Err(Error::FunctionFailed))?
+            .shared_secret;
+
+        // Clear volatile data
+        self.se.enable().or(Err(Error::FunctionFailed))?;
+
+        let flags = if req.attributes.serializable {
+            key::Flags::SERIALIZABLE
+        } else {
+            key::Flags::empty()
+        };
+        let info = key::Info {
+            kind: key::Kind::Shared(shared_secret.len()),
+            flags,
+        };
+
+        let key_id = core_keystore.store_key(
+            req.attributes.persistence,
+            key::Secrecy::Secret,
+            info,
+            &shared_secret,
+        )?;
+        Ok(reply::Agree {
+            shared_secret: key_id,
+        })
     }
 }
 
