@@ -8,8 +8,9 @@ use rand::{CryptoRng, RngCore};
 use se05x::{
     se05x::{
         commands::{
-            CheckObjectExists, CloseSession, CreateSession, DeleteSecureObject, ExportObject,
-            GetRandom, VerifySessionUserId, WriteEcKey, WriteRsaKey, WriteSymmKey, WriteUserId,
+            CheckObjectExists, CloseSession, CreateSession, DeleteSecureObject,
+            EcdhGenerateSharedSecret, ExportObject, GetRandom, VerifySessionUserId, WriteEcKey,
+            WriteRsaKey, WriteSymmKey, WriteUserId,
         },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
         EcCurve, ObjectId, P1KeyType, ProcessSessionCmd, Se05XResult, SymmKeyType,
@@ -21,7 +22,7 @@ use trussed::{
     api::{reply, request, Request},
     backend::Backend,
     config::MAX_MESSAGE_LENGTH,
-    key::{Kind, Secrecy},
+    key::{self, Kind, Secrecy},
     service::Keystore,
     types::{KeyId, Location, Mechanism, Message},
     Bytes, Error,
@@ -502,6 +503,85 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             keystore.store_key(req.attributes.persistence, Secrecy::Secret, kind, material)?;
         Ok(reply::GenerateKey { key })
     }
+
+    fn agree(
+        &mut self,
+        req: &request::Agree,
+        se050_keystore: &mut impl Keystore,
+        core_keystore: &mut impl Keystore,
+    ) -> Result<reply::Agree, Error> {
+        match se050_keystore
+            .location(Secrecy::Secret, &req.private_key)
+            .ok_or(Error::ObjectHandleInvalid)?
+        {
+            Location::Volatile => self.agree_volatile(req, se050_keystore, core_keystore),
+            Location::Internal | Location::External => {
+                self.agree_persistent(req, se050_keystore, core_keystore)
+            }
+        }
+    }
+
+    fn agree_persistent(
+        &mut self,
+        req: &request::Agree,
+        se050_keystore: &mut impl Keystore,
+        core_keystore: &mut impl Keystore,
+    ) -> Result<reply::Agree, Error> {
+        let kind = match req.mechanism {
+            Mechanism::P256 => Kind::P256,
+            Mechanism::X255 => Kind::X255,
+            _ => return Err(Error::MechanismParamInvalid),
+        };
+
+        let priv_key = se050_keystore.load_key(Secrecy::Secret, Some(kind), &req.private_key)?;
+        let priv_key: PersistentKeyMaterial =
+            cbor_smol::cbor_deserialize(&priv_key.material).or(Err(Error::CborError))?;
+
+        let pub_key = core_keystore.load_key(Secrecy::Public, Some(kind), &req.public_key)?;
+
+        let buf = &mut [0; 1024];
+
+        let shared_secret = self
+            .se
+            .run_command(
+                &EcdhGenerateSharedSecret {
+                    key_id: priv_key.object_id,
+                    public_key: &pub_key.material,
+                },
+                buf,
+            )
+            .or(Err(Error::FunctionFailed))?
+            .shared_secret;
+
+        let flags = if req.attributes.serializable {
+            key::Flags::SERIALIZABLE
+        } else {
+            key::Flags::empty()
+        };
+        let info = key::Info {
+            kind: key::Kind::Shared(shared_secret.len()),
+            flags,
+        };
+
+        let key_id = core_keystore.store_key(
+            req.attributes.persistence,
+            key::Secrecy::Secret,
+            info,
+            &shared_secret,
+        )?;
+        Ok(reply::Agree {
+            shared_secret: key_id,
+        })
+    }
+
+    fn agree_volatile(
+        &mut self,
+        req: &request::Agree,
+        se050_keystore: &mut impl Keystore,
+        core_keystore: &mut impl Keystore,
+    ) -> Result<reply::Agree, Error> {
+        todo!()
+    }
 }
 
 fn generate_ed255(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
@@ -578,11 +658,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
         let _client_id = core_ctx.path.clone();
 
         let se050_keystore = &mut resources.keystore(backend_path)?;
-        let _core_keystore = &mut resources.keystore(core_ctx.path.clone())?;
+        let core_keystore = &mut resources.keystore(core_ctx.path.clone())?;
 
         Ok(match request {
             Request::RandomBytes(request::RandomBytes { count }) => self.random_bytes(*count)?,
-            Request::Agree(req) if supported(req.mechanism) => todo!(),
+            Request::Agree(req) if supported(req.mechanism) => {
+                self.agree(req, se050_keystore, core_keystore)?.into()
+            }
             Request::Decrypt(req) if supported(req.mechanism) => todo!(),
             Request::DeriveKey(req) if supported(req.mechanism) => todo!(),
             Request::DeserializeKey(req) if supported(req.mechanism) => todo!(),
