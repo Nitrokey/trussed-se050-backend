@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-se05x = { version  = "0.0.1", features = ["serde"] }
+se05x = { version  = "0.0.1", features = ["serde", "builder"] }
 trussed = { version = "0.1.0", features = ["serde-extensions"] }
 trussed-auth = "0.2.2"
 trussed-staging = { version = "0.1.0", features = ["wrap-key-to-file", "chunked", "encrypted-chunked"] }
@@ -23,7 +23,7 @@ rand = { version = "0.8.5", default-features = false }
 littlefs2 = "0.4.0"
 
 [patch.crates-io]
-se05x = { git = "https://github.com/Nitrokey/se05x.git", rev = "5696f10dd0386b332b2e19bbbe59accdc9a647dc"} 
+se05x = { git = "https://github.com/Nitrokey/se05x.git", rev = "bf696ee99bc893dda385dbbf47e0cdab9c58aba6"} 
 trussed = { git = "https://github.com/Nitrokey/trussed", tag = "v0.1.0-nitrokey.12" }
 trussed-auth = { git = "https://github.com/Nitrokey/trussed-auth", rev = "98eb1e5c1283bb68e0a1ae2f6a7d3cdfc33c3697" }
 trussed-staging = { git = "https://github.com/Nitrokey/trussed-staging.git", branch = "hmacsha256p256" }

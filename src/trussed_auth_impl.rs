@@ -122,12 +122,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let buf = &mut [0; 32];
         debug_now!("Attempting to read");
         let tmp = self.se.run_command(
-            &ReadObject {
-                object_id: GLOBAL_SALT_ID,
-                offset: None,
-                length: Some((SALT_LEN as u16).into()),
-                rsa_key_component: None,
-            },
+            &ReadObject::builder()
+                .object_id(GLOBAL_SALT_ID)
+                .length((SALT_LEN as u16).into())
+                .build(),
             buf,
         );
         match tmp {
@@ -159,14 +157,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         debug_now!("Writing salt");
         self.se
             .run_command(
-                &WriteBinary {
-                    transient: false,
-                    policy: None,
-                    object_id: GLOBAL_SALT_ID,
-                    offset: Some(0.into()),
-                    file_length: Some((SALT_LEN as u16).into()),
-                    data: Some(&salt),
-                },
+                &WriteBinary::builder()
+                    .object_id(GLOBAL_SALT_ID)
+                    .offset(0.into())
+                    .file_length((SALT_LEN as u16).into())
+                    .data(&salt)
+                    .build(),
                 buf,
             )
             .map_err(|_err| {
@@ -294,7 +290,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 let app_key = self.get_app_key(client_id, global_fs, &mut backend_ctx.auth, rng)?;
                 let key = pin_data.check_and_get_key(&request.pin, &app_key, &mut self.se, rng)?;
                 let Some(material) = key else {
-                    return Ok(reply::GetPinKey{result: None}.into());
+                    return Ok(reply::GetPinKey { result: None }.into());
                 };
                 let key_id = keystore.store_key(
                     Location::Volatile,

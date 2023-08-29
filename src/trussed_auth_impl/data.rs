@@ -14,7 +14,7 @@ use se05x::{
             ReadObject, VerifySessionUserId, WriteBinary, WriteSymmKey, WriteUserId,
         },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
-        Be, ObjectId, ProcessSessionCmd, Se05X, Se05XResult, SymmKeyType,
+        ObjectId, ProcessSessionCmd, Se05X, Se05XResult, SymmKeyType,
     },
     t1::I2CForT1,
 };
@@ -208,33 +208,31 @@ impl PinData {
             )?;
             let key: Key = ByteArray::new(key.data.try_into().map_err(|_| Error::Se050)?);
             se050.run_command(
-                &WriteBinary {
-                    object_id: protected_key_id,
-                    transient: false,
-                    policy: Some(PolicySet(protected_key_policy)),
-                    offset: Some(0.into()),
-                    file_length: Some((KEY_LEN as u16).into()),
-                    data: Some(&*key),
-                },
+                &WriteBinary::builder()
+                    .object_id(protected_key_id)
+                    .policy(PolicySet(protected_key_policy))
+                    .offset(0.into())
+                    .file_length((KEY_LEN as u16).into())
+                    .data(&*key)
+                    .build(),
                 buf,
             )?;
         } else {
             tmp2 = simple_pin_policy(self.pin_aes_key_id);
             pin_aes_key_policy = &tmp2;
         }
-        se050.run_command(
-            &WriteSymmKey {
-                transient: false,
-                is_auth: true,
-                key_type: SymmKeyType::Aes,
-                policy: Some(PolicySet(pin_aes_key_policy)),
-                max_attempts: retries.map(u16::from).map(Be::from),
-                object_id: self.pin_aes_key_id,
-                kek_id: None,
-                value: &*pin_aes_key_value,
-            },
-            buf,
-        )?;
+        let write = WriteSymmKey::builder()
+            .is_auth(true)
+            .key_type(SymmKeyType::Aes)
+            .policy(PolicySet(pin_aes_key_policy))
+            // max_attempts(retries.map(u16::from).map(Be::from))
+            .object_id(self.pin_aes_key_id)
+            .value(&*pin_aes_key_value);
+        let write = match retries {
+            None => write.build(),
+            Some(v) => write.max_attempts((v as u16).into()).build(),
+        };
+        se050.run_command(&write, buf)?;
         Ok(())
     }
 
@@ -263,29 +261,27 @@ impl PinData {
 
         let protected_key_policy = &key_policy(this.pin_aes_key_id);
         se050.run_command(
-            &WriteBinary {
-                object_id: protected_key_id,
-                transient: false,
-                policy: Some(PolicySet(protected_key_policy)),
-                offset: Some(0.into()),
-                file_length: Some((KEY_LEN as u16).into()),
-                data: Some(&**key),
-            },
+            &WriteBinary::builder()
+                .object_id(protected_key_id)
+                .policy(PolicySet(protected_key_policy))
+                .offset(0.into())
+                .file_length((KEY_LEN as u16).into())
+                .data(&**key)
+                .build(),
             buf,
         )?;
-        se050.run_command(
-            &WriteSymmKey {
-                transient: false,
-                is_auth: true,
-                key_type: SymmKeyType::Aes,
-                policy: Some(PolicySet(pin_aes_key_policy)),
-                max_attempts: retries.map(u16::from).map(Be::from),
-                object_id: this.pin_aes_key_id,
-                kek_id: None,
-                value: &*pin_aes_key_value,
-            },
-            buf,
-        )?;
+
+        let write = WriteSymmKey::builder()
+            .is_auth(true)
+            .key_type(SymmKeyType::Aes)
+            .policy(PolicySet(pin_aes_key_policy))
+            .object_id(this.pin_aes_key_id)
+            .value(&*pin_aes_key_value);
+        let write = match retries {
+            None => write.build(),
+            Some(v) => write.max_attempts((v as u16).into()).build(),
+        };
+        se050.run_command(&write, buf)?;
         Ok(this)
     }
 
@@ -348,12 +344,10 @@ impl PinData {
                 let key = se050.run_command(
                     &ProcessSessionCmd {
                         session_id,
-                        apdu: ReadObject {
-                            object_id: protected_key_id,
-                            offset: None,
-                            length: Some((KEY_LEN as u16).into()),
-                            rsa_key_component: None,
-                        },
+                        apdu: ReadObject::builder()
+                            .object_id(protected_key_id)
+                            .length((KEY_LEN as u16).into())
+                            .build(),
                     },
                     buf,
                 )?;
@@ -403,16 +397,12 @@ impl PinData {
         se050.run_command(
             &ProcessSessionCmd {
                 session_id,
-                apdu: WriteSymmKey {
-                    transient: false,
-                    is_auth: true,
-                    key_type: SymmKeyType::Aes,
-                    policy: None,
-                    max_attempts: None,
-                    object_id: self.pin_aes_key_id,
-                    kek_id: None,
-                    value: &*new_pin_aes_key_value,
-                },
+                apdu: WriteSymmKey::builder()
+                    .is_auth(true)
+                    .key_type(SymmKeyType::Aes)
+                    .object_id(self.pin_aes_key_id)
+                    .value(&*new_pin_aes_key_value)
+                    .build(),
             },
             buf,
         )?;
@@ -476,12 +466,10 @@ impl PinData {
 
             debug!("Writing userid ");
             se050.run_command(
-                &WriteUserId {
-                    policy: None,
-                    max_attempts: None,
-                    object_id: protected_key_id,
-                    data: &hex!("01020304"),
-                },
+                &WriteUserId::builder()
+                    .object_id(protected_key_id)
+                    .data(&hex!("01020304"))
+                    .build(),
                 buf,
             )?;
             debug!("Creating session");
@@ -585,7 +573,8 @@ pub(crate) fn delete_all_pins<Twi: I2CForT1, D: DelayUs<u32>>(
     debug!("Deleting all pins");
     let Some((first, mut state)) = fs
         .read_dir_first(path!(""), location, None)
-        .map_err(|_| Error::ReadFailed)? else {
+        .map_err(|_| Error::ReadFailed)?
+    else {
         return Ok(());
     };
     debug!("ReadFirst");
