@@ -102,11 +102,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         .into())
     }
 
-    fn delete<R: CryptoRng + RngCore>(
+    fn delete(
         &mut self,
         key: &KeyId,
         keystore: &mut impl Keystore,
-        rng: &mut R,
     ) -> Result<reply::Delete, Error> {
         // If the key is not found in the se050 keystore, pass the call to the core API
         // The backend only stores secret keys (even public keys are actually the secret part)
@@ -590,9 +589,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
             Request::DeriveKey(req) if supported(req.mechanism) => todo!(),
             Request::DeserializeKey(req) if supported(req.mechanism) => todo!(),
             Request::Encrypt(req) if supported(req.mechanism) => todo!(),
-            Request::Delete(request::Delete { key }) => {
-                self.delete(key, se050_keystore, rng)?.into()
-            }
+            Request::Delete(request::Delete { key }) => self.delete(key, se050_keystore)?.into(),
             Request::DeleteAllKeys(_req) => todo!(),
             Request::Exists(req) if supported(req.mechanism) => todo!(),
             Request::GenerateKey(req) if supported(req.mechanism) => {
