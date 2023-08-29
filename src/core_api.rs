@@ -2,15 +2,17 @@
 
 use cbor_smol::cbor_serialize;
 use embedded_hal::blocking::delay::DelayUs;
+use hex_literal::hex;
 use littlefs2::path::PathBuf;
 use rand::{CryptoRng, RngCore};
 use se05x::{
     se05x::{
         commands::{
-            DeleteSecureObject, ExportObject, GetRandom, WriteEcKey, WriteRsaKey, WriteSymmKey,
+            CheckObjectExists, CloseSession, CreateSession, DeleteSecureObject, ExportObject,
+            GetRandom, VerifySessionUserId, WriteEcKey, WriteRsaKey, WriteSymmKey, WriteUserId,
         },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
-        EcCurve, ObjectId, P1KeyType, SymmKeyType,
+        EcCurve, ObjectId, P1KeyType, ProcessSessionCmd, Se05XResult, SymmKeyType,
     },
     t1::I2CForT1,
 };
@@ -111,55 +113,136 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let loaded_key = keystore
             .load_key(Secrecy::Secret, None, key)
             .or(Err(Error::MechanismNotAvailable))?;
-        match loaded_key.kind {
-            Kind::Ed255 | Kind::X255 | Kind::P256 => {
-                self.delete_ecc_key(&loaded_key.material, keystore, key, rng)
+        let material: PersistentKeyMaterial =
+            cbor_smol::cbor_deserialize(&loaded_key.material).or(Err(Error::FunctionFailed))?;
+        match material.metatada {
+            PersistentMetadata::None | PersistentMetadata::StandardVolatile => {
+                self.delete_standard_key(material.object_id, key, keystore)
             }
-            Kind::Rsa2048 | Kind::Rsa3072 | Kind::Rsa4096 => {
-                self.delete_rsa_key(&loaded_key.material, keystore, key, rng)
+            PersistentMetadata::RsaVolatile { intermediary } => {
+                self.delete_volatile_rsa_key(material.object_id, intermediary, key, keystore)
             }
-            _ => Err(Error::MechanismInvalid),
         }
     }
 
-    fn delete_ecc_key<R: CryptoRng + RngCore>(
+    fn delete_standard_key(
         &mut self,
-        material: &[u8],
-        keystore: &mut impl Keystore,
+        object_id: ObjectId,
         key: &KeyId,
-        rng: &mut R,
+        keystore: &mut impl Keystore,
     ) -> Result<reply::Delete, Error> {
-        let material: PersistentKeyMaterial =
-            cbor_smol::cbor_deserialize(material).or(Err(Error::FunctionFailed))?;
-        if !matches!(
-            material.metatada,
-            PersistentMetadata::None | PersistentMetadata::StandardVolatile
-        ) {
-            return Err(Error::FunctionFailed);
-        }
-
         let buf = &mut [0; 1024];
         self.se
-            .run_command(
-                &DeleteSecureObject {
-                    object_id: material.object_id,
-                },
-                buf,
-            )
+            .run_command(&DeleteSecureObject { object_id }, buf)
             .or(Err(Error::FunctionFailed))?;
         Ok(reply::Delete {
             success: keystore.delete_key(key),
         })
     }
 
-    fn delete_rsa_key<R: CryptoRng + RngCore>(
+    fn delete_volatile_rsa_key(
         &mut self,
-        material: &[u8],
+        key: ObjectId,
+        intermediary: ObjectId,
+        metadata: &KeyId,
         keystore: &mut impl Keystore,
-        key: &KeyId,
-        rng: &mut R,
     ) -> Result<reply::Delete, Error> {
-        todo!()
+        let buf = &mut [0; 1024];
+
+        let exists = self
+            .se
+            .run_command(&CheckObjectExists { object_id: key }, buf)
+            .map_err(|_err| {
+                debug!("Failed existence check: {_err:?}");
+                Error::FunctionFailed
+            })?
+            .result;
+        if exists == Se05XResult::Success {
+            debug!("Deleting key");
+            self.se
+                .run_command(&DeleteSecureObject { object_id: key }, buf)
+                .map_err(|_err| {
+                    debug!("Failed deletion: {_err:?}");
+                    Error::FunctionFailed
+                })?;
+        }
+
+        debug!("Writing userid ");
+        self.se
+            .run_command(
+                &WriteUserId::builder()
+                    .object_id(key)
+                    .data(&hex!("01020304"))
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                debug!("Failed WriteUserId: {_err:?}");
+                Error::FunctionFailed
+            })?;
+        debug!("Creating session");
+        let session_id = self
+            .se
+            .run_command(&CreateSession { object_id: key }, buf)
+            .map_err(|_err| {
+                debug!("Failed to create session: {_err:?}");
+                Error::FunctionFailed
+            })?
+            .session_id;
+        debug!("Auth session");
+        self.se
+            .run_command(
+                &ProcessSessionCmd {
+                    session_id,
+                    apdu: VerifySessionUserId {
+                        user_id: &hex!("01020304"),
+                    },
+                },
+                buf,
+            )
+            .map_err(|_err| {
+                debug!("Failed VerifySessionUserId: {_err:?}");
+                Error::FunctionFailed
+            })?;
+
+        debug!("Deleting auth");
+        self.se
+            .run_command(
+                &ProcessSessionCmd {
+                    session_id,
+                    apdu: DeleteSecureObject {
+                        object_id: intermediary,
+                    },
+                },
+                buf,
+            )
+            .map_err(|_err| {
+                debug!("Failed to delete auth: {_err:?}");
+                Error::FunctionFailed
+            })?;
+        debug!("Closing sess");
+        self.se
+            .run_command(
+                &ProcessSessionCmd {
+                    session_id,
+                    apdu: CloseSession {},
+                },
+                buf,
+            )
+            .map_err(|_err| {
+                debug!("Failed to close session: {_err:?}");
+                Error::FunctionFailed
+            })?;
+        debug!("Deleting userid");
+        self.se
+            .run_command(&DeleteSecureObject { object_id: key }, buf)
+            .map_err(|_err| {
+                debug!("Failed to delete user id: {_err:?}");
+                Error::FunctionFailed
+            })?;
+        Ok(reply::Delete {
+            success: keystore.delete_key(metadata),
+        })
     }
 
     fn generate_key<R: CryptoRng + RngCore>(
