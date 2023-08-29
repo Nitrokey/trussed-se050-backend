@@ -8,7 +8,7 @@ use se05x::{
     se05x::{
         commands::{ExportObject, GetRandom, WriteEcKey, WriteRsaKey, WriteSymmKey},
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
-        EcCurve, ObjectId, P1KeyType, RsaKeyComponent, SymmKeyType,
+        EcCurve, ObjectId, P1KeyType, SymmKeyType,
     },
     t1::I2CForT1,
 };
@@ -156,38 +156,24 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             .or(Err(trussed::Error::FunctionFailed))?;
         self.se
             .run_command(
-                &WriteSymmKey {
-                    transient: false,
-                    is_auth: true,
-                    key_type: SymmKeyType::Aes,
-                    policy: Some(PolicySet(&policy_for_intermediary(real_key_id))),
-                    max_attempts: None,
-                    object_id: intermediary_id,
-                    kek_id: None,
-                    value: &key,
-                },
+                &WriteSymmKey::builder()
+                    .is_auth(true)
+                    .key_type(SymmKeyType::Aes)
+                    .policy(PolicySet(&policy_for_intermediary(real_key_id)))
+                    .object_id(intermediary_id)
+                    .value(&key)
+                    .build(),
                 buf,
             )
             .or(Err(trussed::Error::FunctionFailed))?;
         self.se
             .run_command(
-                &WriteRsaKey {
-                    transient: false,
-                    is_auth: false,
-                    key_type: Some(P1KeyType::KeyPair),
-                    policy: Some(PolicySet(&policy_for_key(intermediary_id))),
-                    max_attempts: None,
-                    object_id: real_key_id,
-                    key_size: Some(size.into()),
-                    p: None,
-                    q: None,
-                    dp: None,
-                    dq: None,
-                    inv_q: None,
-                    e: None,
-                    d: None,
-                    n: None,
-                },
+                &WriteRsaKey::builder()
+                    .key_type(P1KeyType::KeyPair)
+                    .policy(PolicySet(&policy_for_key(intermediary_id)))
+                    .object_id(real_key_id)
+                    .key_size(size.into())
+                    .build(),
                 buf,
             )
             .or(Err(trussed::Error::FunctionFailed))?;
@@ -281,13 +267,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         )?;
         let exported = self
             .se
-            .run_command(
-                &ExportObject {
-                    object_id,
-                    rsa_key_component: RsaKeyComponent::Na,
-                },
-                buf,
-            )
+            .run_command(&ExportObject::builder().object_id(object_id).build(), buf)
             .or(Err(trussed::Error::FunctionFailed))?
             .data;
         let material: Bytes<1024> = trussed::cbor_serialize_bytes(&VolatileKeyMaterialRef {
@@ -376,65 +356,38 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 }
 
 fn generate_ed255(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
-    WriteEcKey {
-        transient,
-        is_auth: false,
-        key_type: Some(P1KeyType::KeyPair),
-        policy: None,
-        max_attempts: None,
-        object_id,
-        curve: Some(EcCurve::IdEccEd25519),
-        private_key: None,
-        public_key: None,
-    }
+    WriteEcKey::builder()
+        .transient(transient)
+        .key_type(P1KeyType::KeyPair)
+        .object_id(object_id)
+        .curve(EcCurve::IdEccEd25519)
+        .build()
 }
 
 fn generate_x255(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
-    WriteEcKey {
-        transient,
-        is_auth: false,
-        key_type: Some(P1KeyType::KeyPair),
-        policy: None,
-        max_attempts: None,
-        object_id,
-        curve: Some(EcCurve::IdEccMontDh25519),
-        private_key: None,
-        public_key: None,
-    }
+    WriteEcKey::builder()
+        .transient(transient)
+        .key_type(P1KeyType::KeyPair)
+        .object_id(object_id)
+        .curve(EcCurve::IdEccMontDh25519)
+        .build()
 }
 
 fn generate_p256(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
-    WriteEcKey {
-        transient,
-        is_auth: false,
-        key_type: Some(P1KeyType::KeyPair),
-        policy: None,
-        max_attempts: None,
-        object_id,
-        curve: Some(EcCurve::IdEccMontDh25519),
-        private_key: None,
-        public_key: None,
-    }
+    WriteEcKey::builder()
+        .transient(transient)
+        .key_type(P1KeyType::KeyPair)
+        .object_id(object_id)
+        .curve(EcCurve::NistP256)
+        .build()
 }
 
 fn generate_rsa(object_id: ObjectId, size: u16) -> WriteRsaKey<'static> {
-    WriteRsaKey {
-        transient: false,
-        is_auth: false,
-        key_type: Some(P1KeyType::KeyPair),
-        policy: None,
-        max_attempts: None,
-        object_id,
-        key_size: Some(size.into()),
-        p: None,
-        q: None,
-        dp: None,
-        dq: None,
-        inv_q: None,
-        e: None,
-        d: None,
-        n: None,
-    }
+    WriteRsaKey::builder()
+        .key_type(P1KeyType::KeyPair)
+        .object_id(object_id)
+        .key_size(size.into())
+        .build()
 }
 
 fn supported(mechanism: Mechanism) -> bool {
