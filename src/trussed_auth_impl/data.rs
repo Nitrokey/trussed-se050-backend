@@ -1,4 +1,7 @@
-use crate::{generate_object_id, trussed_auth_impl::KEY_LEN};
+use crate::{
+    namespacing::{NamespaceValue, PinObjectId},
+    trussed_auth_impl::KEY_LEN,
+};
 
 use super::{Error, Key, Salt, HASH_LEN, SALT_LEN};
 
@@ -112,9 +115,8 @@ pub(crate) struct PinData {
     id: PinId,
     salt: Salt,
     /// Id of the AES key authentication object for the PIN
-    pin_aes_key_id: ObjectId,
-    /// Id of the binary object protected by the PIN. None if the PIN protects nothing
-    protected_key_id: Option<ObjectId>,
+    se_id: PinObjectId,
+    derived_key: bool,
 }
 
 fn simple_pin_policy(pin_aes_key_id: ObjectId) -> [Policy; 2] {
@@ -157,15 +159,19 @@ fn key_policy(pin_aes_key_id: ObjectId) -> [Policy; 2] {
 }
 
 impl PinData {
-    pub fn new<R: RngCore + CryptoRng>(id: PinId, rng: &mut R, derived_key: bool) -> Self {
+    pub fn new<R: RngCore + CryptoRng>(
+        id: PinId,
+        ns: NamespaceValue,
+        rng: &mut R,
+        derived_key: bool,
+    ) -> Self {
         let salt = ByteArray::new(rng.gen());
-        let pin_aes_key_id = generate_object_id(rng);
-        let protected_key_id = derived_key.then(|| generate_object_id(rng));
+        let pin_aes_key_id = PinObjectId::new(rng, ns);
         Self {
             id,
             salt,
-            pin_aes_key_id,
-            protected_key_id,
+            se_id: pin_aes_key_id,
+            derived_key,
         }
     }
 
@@ -195,11 +201,11 @@ impl PinData {
         let pin_aes_key_policy;
         // So that temporary arrays are scoped to the function to please the borrow checker
         let (tmp1, tmp2);
-        if let Some(protected_key_id) = self.protected_key_id {
-            tmp1 = pin_policy_with_key(self.pin_aes_key_id, protected_key_id);
+        if self.derived_key {
+            tmp1 = pin_policy_with_key(self.se_id.pin_id(), self.se_id.protected_key_id());
             pin_aes_key_policy = &tmp1;
 
-            let protected_key_policy = &key_policy(self.pin_aes_key_id);
+            let protected_key_policy = &key_policy(self.se_id.pin_id());
             let key = se050.run_command(
                 &GetRandom {
                     length: (KEY_LEN as u16).into(),
@@ -209,7 +215,7 @@ impl PinData {
             let key: Key = ByteArray::new(key.data.try_into().map_err(|_| Error::Se050)?);
             se050.run_command(
                 &WriteBinary::builder()
-                    .object_id(protected_key_id)
+                    .object_id(self.se_id.protected_key_id())
                     .policy(PolicySet(protected_key_policy))
                     .offset(0.into())
                     .file_length((KEY_LEN as u16).into())
@@ -218,15 +224,14 @@ impl PinData {
                 buf,
             )?;
         } else {
-            tmp2 = simple_pin_policy(self.pin_aes_key_id);
+            tmp2 = simple_pin_policy(self.se_id.pin_id());
             pin_aes_key_policy = &tmp2;
         }
         let write = WriteSymmKey::builder()
             .is_auth(true)
             .key_type(SymmKeyType::Aes)
             .policy(PolicySet(pin_aes_key_policy))
-            // max_attempts(retries.map(u16::from).map(Be::from))
-            .object_id(self.pin_aes_key_id)
+            .object_id(self.se_id.pin_id())
             .value(&*pin_aes_key_value);
         let write = match retries {
             None => write.build(),
@@ -248,18 +253,19 @@ impl PinData {
         retries: Option<u8>,
         rng: &mut R,
         key: &Key,
+        ns: NamespaceValue,
     ) -> Result<Self, Error> {
-        let this = Self::new(id, rng, true);
+        let this = Self::new(id, ns, rng, true);
         this.save(fs, location)?;
 
         let buf = &mut [0; 128];
         let pin_aes_key_value = expand_pin_key(&this.salt, app_key, this.id, value);
 
-        let protected_key_id = this.protected_key_id.unwrap();
+        let protected_key_id = this.se_id.protected_key_id();
 
-        let pin_aes_key_policy = &pin_policy_with_key(this.pin_aes_key_id, protected_key_id);
+        let pin_aes_key_policy = &pin_policy_with_key(this.se_id.pin_id(), protected_key_id);
 
-        let protected_key_policy = &key_policy(this.pin_aes_key_id);
+        let protected_key_policy = &key_policy(this.se_id.pin_id());
         se050.run_command(
             &WriteBinary::builder()
                 .object_id(protected_key_id)
@@ -275,7 +281,7 @@ impl PinData {
             .is_auth(true)
             .key_type(SymmKeyType::Aes)
             .policy(PolicySet(pin_aes_key_policy))
-            .object_id(this.pin_aes_key_id)
+            .object_id(this.se_id.pin_id())
             .value(&*pin_aes_key_value);
         let write = match retries {
             None => write.build(),
@@ -297,7 +303,7 @@ impl PinData {
         let pin_aes_key_value = expand_pin_key(&self.salt, app_key, self.id, value);
         let res = se050.run_command(
             &CreateSession {
-                object_id: self.pin_aes_key_id,
+                object_id: self.se_id.pin_id(),
             },
             buf,
         )?;
@@ -326,7 +332,7 @@ impl PinData {
         se050: &mut Se05X<Twi, D>,
         rng: &mut R,
     ) -> Result<Option<Key>, Error> {
-        let Some(protected_key_id) = self.protected_key_id else {
+        if !self.derived_key {
             return Err(Error::BadPinType);
         };
 
@@ -334,7 +340,7 @@ impl PinData {
         let pin_aes_key_value = expand_pin_key(&self.salt, app_key, self.id, value);
         let res = se050.run_command(
             &CreateSession {
-                object_id: self.pin_aes_key_id,
+                object_id: self.se_id.pin_id(),
             },
             buf,
         )?;
@@ -345,7 +351,7 @@ impl PinData {
                     &ProcessSessionCmd {
                         session_id,
                         apdu: ReadObject::builder()
-                            .object_id(protected_key_id)
+                            .object_id(self.se_id.protected_key_id())
                             .length((KEY_LEN as u16).into())
                             .build(),
                     },
@@ -382,7 +388,7 @@ impl PinData {
         let pin_aes_key_value = expand_pin_key(&self.salt, app_key, self.id, &request.old_pin);
         let res = se050.run_command(
             &CreateSession {
-                object_id: self.pin_aes_key_id,
+                object_id: self.se_id.pin_id(),
             },
             buf,
         )?;
@@ -400,7 +406,7 @@ impl PinData {
                 apdu: WriteSymmKey::builder()
                     .is_auth(true)
                     .key_type(SymmKeyType::Aes)
-                    .object_id(self.pin_aes_key_id)
+                    .object_id(self.se_id.pin_id())
                     .value(&*new_pin_aes_key_value)
                     .build(),
             },
@@ -435,12 +441,12 @@ impl PinData {
     ) -> Result<(), Error> {
         let buf = &mut [0; 1024];
         debug!("Deleting {self:02x?}");
-        if let Some(protected_key_id) = self.protected_key_id {
+        if self.derived_key {
             debug!("checking existence");
             let exists = se050
                 .run_command(
                     &CheckObjectExists {
-                        object_id: protected_key_id,
+                        object_id: self.se_id.protected_key_id(),
                     },
                     buf,
                 )
@@ -454,7 +460,7 @@ impl PinData {
                 se050
                     .run_command(
                         &DeleteSecureObject {
-                            object_id: protected_key_id,
+                            object_id: self.se_id.protected_key_id(),
                         },
                         buf,
                     )
@@ -467,7 +473,7 @@ impl PinData {
             debug!("Writing userid ");
             se050.run_command(
                 &WriteUserId::builder()
-                    .object_id(protected_key_id)
+                    .object_id(self.se_id.protected_key_id())
                     .data(&hex!("01020304"))
                     .build(),
                 buf,
@@ -476,7 +482,7 @@ impl PinData {
             let session_id = se050
                 .run_command(
                     &CreateSession {
-                        object_id: protected_key_id,
+                        object_id: self.se_id.protected_key_id(),
                     },
                     buf,
                 )?
@@ -497,7 +503,7 @@ impl PinData {
                     &ProcessSessionCmd {
                         session_id,
                         apdu: DeleteSecureObject {
-                            object_id: self.pin_aes_key_id,
+                            object_id: self.se_id.pin_id(),
                         },
                     },
                     buf,
@@ -517,7 +523,7 @@ impl PinData {
             debug!("Deleting userid");
             se050.run_command(
                 &DeleteSecureObject {
-                    object_id: protected_key_id,
+                    object_id: self.se_id.protected_key_id(),
                 },
                 buf,
             )?;
@@ -525,7 +531,7 @@ impl PinData {
             debug!("Deleting simple");
             se050.run_command(
                 &DeleteSecureObject {
-                    object_id: self.pin_aes_key_id,
+                    object_id: self.se_id.pin_id(),
                 },
                 buf,
             )?;
