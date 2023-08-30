@@ -1,4 +1,6 @@
-#![no_std]
+#![cfg_attr(not(test), no_std)]
+
+use core::ops::Range;
 
 use embedded_hal::blocking::delay::DelayUs;
 use littlefs2::path::Path;
@@ -118,3 +120,5 @@ pub struct ContextNs<'a> {
 fn generate_object_id<R: RngCore + CryptoRng>(rng: &mut R) -> ObjectId {
     ObjectId(rng.gen_range(0x00000002u32..0x7FFF0000).to_be_bytes())
 }
+
+const ID_RANGE: Range<u32> = 0x000000FF..0x7FFF0000;

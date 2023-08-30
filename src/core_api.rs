@@ -28,10 +28,21 @@ use trussed::{
     Bytes, Error,
 };
 
-use crate::{generate_object_id, Context, Se050Backend, BACKEND_DIR};
+use crate::{
+    generate_object_id,
+    namespacing::{NamespaceValue, PersistentObjectId, VolatileObjectId, VolatileRsaObjectId},
+    Context, Se050Backend, BACKEND_DIR,
+};
 
 const BUFFER_LEN: usize = 2048;
 const CORE_DIR: &str = "se050-core";
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub(crate) enum PersistentMaterial {
+    Persistent(PersistentObjectId),
+    Volatile(VolatileObjectId),
+    VolatileRsa(VolatileRsaObjectId),
+}
 
 /// Persistent metadata for
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -250,11 +261,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         req: &request::GenerateKey,
         keystore: &mut impl Keystore,
         rng: &mut R,
+        ns: NamespaceValue,
     ) -> Result<reply::GenerateKey, Error> {
         match req.attributes.persistence {
-            Location::Volatile => self.generate_volatile_key(req, keystore, rng),
+            Location::Volatile => self.generate_volatile_key(req, keystore, rng, ns),
             Location::Internal | Location::External => {
-                self.generate_persistent_key(req, keystore, rng)
+                self.generate_persistent_key(req, keystore, rng, ns)
             }
         }
     }
@@ -265,7 +277,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         size: u16,
         kind: Kind,
         rng: &mut R,
+        ns: NamespaceValue,
     ) -> Result<reply::GenerateKey, Error> {
+        assert!(matches!(
+            kind,
+            Kind::Rsa2048 | Kind::Rsa3072 | Kind::Rsa4096
+        ));
         let buf = &mut [0; 1024];
         let real_key_id = generate_object_id(rng);
         let intermediary_id = generate_object_id(rng);
@@ -364,19 +381,20 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         req: &request::GenerateKey,
         keystore: &mut impl Keystore,
         rng: &mut R,
+        ns: NamespaceValue,
     ) -> Result<reply::GenerateKey, Error> {
         let kind = match req.mechanism {
             Mechanism::Ed255 => Kind::Ed255,
             Mechanism::X255 => Kind::X255,
             Mechanism::P256 => Kind::P256,
             Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => {
-                return self.generate_volatile_rsa_key(keystore, 2048, Kind::Rsa2048, rng);
+                return self.generate_volatile_rsa_key(keystore, 2048, Kind::Rsa2048, rng, ns);
             }
             Mechanism::Rsa3072Raw | Mechanism::Rsa3072Pkcs1v15 => {
-                return self.generate_volatile_rsa_key(keystore, 3072, Kind::Rsa3072, rng);
+                return self.generate_volatile_rsa_key(keystore, 3072, Kind::Rsa3072, rng, ns);
             }
             Mechanism::Rsa4096Raw | Mechanism::Rsa4096Pkcs1v15 => {
-                return self.generate_volatile_rsa_key(keystore, 4096, Kind::Rsa4096, rng);
+                return self.generate_volatile_rsa_key(keystore, 4096, Kind::Rsa4096, rng, ns);
             }
             // Other mechanisms are filtered through the `supported` function
             _ => unreachable!(),
@@ -440,6 +458,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         req: &request::GenerateKey,
         keystore: &mut impl Keystore,
         rng: &mut R,
+        ns: NamespaceValue,
     ) -> Result<reply::GenerateKey, Error> {
         let buf = &mut [0; 1024];
         let object_id = generate_object_id(rng);
@@ -701,7 +720,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
     fn request<P: trussed::Platform>(
         &mut self,
         core_ctx: &mut trussed::types::CoreContext,
-        _backend_ctx: &mut Self::Context,
+        backend_ctx: &mut Self::Context,
         request: &Request,
         resources: &mut trussed::service::ServiceResources<P>,
     ) -> Result<trussed::Reply, Error> {
@@ -720,6 +739,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
         let se050_keystore = &mut resources.keystore(backend_path)?;
         let core_keystore = &mut resources.keystore(core_ctx.path.clone())?;
 
+        let backend_ctx = backend_ctx.with_namespace(&self.ns, &core_ctx.path);
+        let ns = backend_ctx.ns;
+
         Ok(match request {
             Request::RandomBytes(request::RandomBytes { count }) => self.random_bytes(*count)?,
             Request::Agree(req) if supported(req.mechanism) => {
@@ -734,7 +756,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
             Request::DeleteAllKeys(_req) => todo!(),
             Request::Exists(req) if supported(req.mechanism) => todo!(),
             Request::GenerateKey(req) if supported(req.mechanism) => {
-                self.generate_key(req, se050_keystore, rng)?.into()
+                self.generate_key(req, se050_keystore, rng, ns)?.into()
             }
             Request::GenerateSecretKey(_req) => todo!(),
             Request::SerializeKey(req) if supported(req.mechanism) => todo!(),

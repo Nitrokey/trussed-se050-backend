@@ -3,11 +3,16 @@ use littlefs2::path::Path;
 use rand::{CryptoRng, Rng, RngCore};
 use se05x::se05x::ObjectId;
 use serde::{Deserialize, Serialize};
+use trussed::types::KeyId;
 
-pub struct FromU8Error;
+use crate::ID_RANGE;
 
-macro_rules! enum_u8 {
+#[derive(Debug, Clone, Copy)]
+pub struct FromReprError;
+
+macro_rules! enum_number {
     (
+        #[repr($repr:tt)]
         $(#[$outer:meta])*
         $vis:vis enum $name:ident {
             $($(#[$doc:meta])* $var:ident = $num:expr),+
@@ -15,7 +20,7 @@ macro_rules! enum_u8 {
         }
     ) => {
         $(#[$outer])*
-        #[repr(u8)]
+        #[repr($repr)]
         $vis enum $name {
             $(
                 $(#[$doc])*
@@ -23,20 +28,20 @@ macro_rules! enum_u8 {
             )*
         }
 
-        impl TryFrom<u8> for $name {
-            type Error = FromU8Error;
-            fn try_from(val: u8) -> ::core::result::Result<Self, FromU8Error> {
+        impl TryFrom<$repr> for $name {
+            type Error = FromReprError;
+            fn try_from(val:$repr) -> ::core::result::Result<Self, FromReprError> {
                 match val {
                     $(
                         $num => Ok($name::$var),
                     )*
-                    _ => Err(FromU8Error)
+                    _ => Err(FromReprError)
                 }
             }
         }
 
-        impl From<$name> for u8 {
-            fn from(value: $name) -> u8 {
+        impl From<$name> for $repr {
+            fn from(value: $name) -> $repr {
                 match value {
                     $(
                         $name::$var => $num,
@@ -59,7 +64,8 @@ macro_rules! enum_u8 {
     }
 }
 
-enum_u8! {
+enum_number! {
+    #[repr(u8)]
     /// 4 bits that represent which client does the object belongs to
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd)]
     pub enum NamespaceValue {
@@ -82,7 +88,8 @@ enum_u8! {
     }
 }
 
-enum_u8! {
+enum_number! {
+    #[repr(u8)]
     /// 4 bits representing the kind of an object
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd)]
     pub(crate) enum ObjectKind {
@@ -165,12 +172,25 @@ mod tests {
 
 macro_rules! wrapper {
     ($name:ident, $kind:expr) => {
-        #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+        #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
         pub(crate) struct $name(pub(crate) ObjectId);
+
+        impl Deref for $name {
+            type Target = ObjectId;
+            fn deref(&self) -> &ObjectId {
+                &self.0
+            }
+        }
 
         impl $name {
             pub fn new<R: RngCore + CryptoRng>(rng: &mut R, ns: NamespaceValue) -> Self {
                 Self(generate_object_id_ns(rng, ns, $kind))
+            }
+
+            pub fn from_value(mut object: ObjectId) -> Self {
+                object.0[3] &= 0xF0;
+                object.0[3] |= $kind as u8;
+                Self(object)
             }
         }
     };
@@ -201,5 +221,140 @@ impl PinObjectId {
             ObjectKind::PinProtectedBinObject
         );
         ObjectId(base)
+    }
+}
+
+wrapper!(PersistentObjectId, ObjectKind::PersistentKey);
+wrapper!(VolatileObjectId, ObjectKind::VolatileKey);
+wrapper!(VolatileRsaObjectId, ObjectKind::VolatileRsaKey);
+wrapper!(SaltValueObjectId, ObjectKind::VolatileRsaKey);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ParsedObjectId {
+    Pin(PinObjectId),
+    PersistentKey(PersistentObjectId),
+    VolatileKey(VolatileObjectId),
+    VolatileRsaKey(VolatileRsaObjectId),
+    SaltValue(SaltValueObjectId),
+}
+
+impl ParsedObjectId {
+    fn parse(id: ObjectId) -> Option<(NamespaceValue, ParsedObjectId)> {
+        let (ns, kind) = parse_namespace(id.0[3])?;
+        let parsed = match kind {
+            ObjectKind::Reserved => return None,
+            ObjectKind::PinAesKey | ObjectKind::PinProtectedBinObject => {
+                ParsedObjectId::Pin(PinObjectId::from_value(id))
+            }
+            ObjectKind::PersistentKey => {
+                ParsedObjectId::PersistentKey(PersistentObjectId::from_value(id))
+            }
+            ObjectKind::VolatileKey => {
+                ParsedObjectId::VolatileKey(VolatileObjectId::from_value(id))
+            }
+            ObjectKind::VolatileRsaKey | ObjectKind::VolatileRsaIntermediary => {
+                ParsedObjectId::VolatileRsaKey(VolatileRsaObjectId::from_value(id))
+            }
+            ObjectKind::SaltValue => ParsedObjectId::SaltValue(SaltValueObjectId::from_value(id)),
+        };
+        Some((ns, parsed))
+    }
+}
+
+// KEY-ID to ObjectId mapping
+// Key IDS are 128 bits
+//
+// Key IDs that belong to the SE050 backend start with 64 bits of 0xCAFE42424242CAFE to be able to recognize them.
+// The next 16 bits are for metadata for the key type
+// The next 16 bits are for the privacy of the key public/private
+// The next 32 bits are the ObjectId itself
+//
+// Considerations
+//
+// The Namespace value within the object ID *MUST* be checked to to be
+// - Within the range of acceptable IDs (0x00000000..0x7FFF0000)
+// - Within the correct namespace
+
+enum_number! {
+    #[repr(u16)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd)]
+    pub(crate) enum Privacy {
+        Secret = 0x0,
+        Public = 0x1,
+    }
+}
+
+enum_number! {
+    #[repr(u16)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd)]
+    pub(crate) enum KeyType {
+        Ed255 = 0x0,
+        X255 = 0x1,
+        P256 = 0x2,
+        Rsa2048 = 0x4,
+        Rsa3072 = 0x5,
+        Rsa4096 = 0x6,
+    }
+}
+
+pub(crate) fn key_id_for_obj(obj: ObjectId, privacy: Privacy, ty: KeyType) -> KeyId {
+    let mut base = 0xCAFE42424242CAFE0000000000000000;
+    let obj = u32::from_be_bytes(obj.0);
+    base |= obj as u128;
+    base |= (privacy as u16 as u128) << 32;
+    base |= (ty as u16 as u128) << (32 + 16);
+
+    KeyId::from_value(base)
+}
+
+pub(crate) fn parse_key_id(
+    id: KeyId,
+    ns: NamespaceValue,
+) -> Option<(ParsedObjectId, KeyType, Privacy)> {
+    let val = id.value();
+    if val & 0xFFFFFFFFFFFFFFFF0000000000000000 != 0xCAFE42424242CAFE0000000000000000 {
+        return None;
+    }
+
+    let ty = (((val & 0xFFFF << (32 + 16)) >> (32 + 16)) as u16)
+        .try_into()
+        .ok()?;
+    let privacy = (((val & 0xFFFF << 32) >> 32) as u16).try_into().ok()?;
+
+    let id_value = val as u32;
+    if !ID_RANGE.contains(&id_value) {
+        return None;
+    }
+    let (parsed_ns, parsed_id) = ParsedObjectId::parse(ObjectId(id_value.to_be_bytes()))?;
+
+    // IMPORTANT! Don't all applications to access other applications' keys
+    if parsed_ns != ns {
+        return None;
+    }
+    Some((parsed_id, ty, privacy))
+}
+
+#[cfg(test)]
+mod tests2 {
+    use super::*;
+    #[test]
+    fn key_ids() {
+        let obj_id = PinObjectId::from_value(ObjectId(0x0ABBCCDDu32.to_be_bytes()));
+        assert!(ID_RANGE.contains(&u32::from_be_bytes(obj_id.0 .0)));
+        assert_eq!(
+            KeyId::from_value(0xCAFE42424242CAFE000400010ABBCCD1u128),
+            key_id_for_obj(*obj_id, Privacy::Public, KeyType::Rsa2048)
+        );
+
+        let ns = 0xD.try_into().unwrap();
+        for ty in KeyType::all() {
+            for p in Privacy::all() {
+                let key_id = key_id_for_obj(*obj_id, *p, *ty);
+                let (parsed_key, parsed_ty, parsed_priv) = parse_key_id(key_id, ns).unwrap();
+                assert_eq!(parsed_key, ParsedObjectId::Pin(obj_id));
+                assert_eq!(parsed_ty, *ty);
+                assert_eq!(parsed_priv, *p)
+            }
+        }
     }
 }
