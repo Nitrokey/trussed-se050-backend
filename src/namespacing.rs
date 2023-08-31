@@ -343,12 +343,15 @@ enum_number! {
     }
 }
 
+const PRIVACY_OFFSET: u32 = 32;
+const TY_OFFSET: u32 = PRIVACY_OFFSET + 16;
+
 pub(crate) fn key_id_for_obj(obj: ObjectId, privacy: Privacy, ty: KeyType) -> KeyId {
     let mut base = 0xCAFE42424242CAFE0000000000000000;
     let obj = u32::from_be_bytes(obj.0);
     base |= obj as u128;
-    base |= (privacy as u16 as u128) << 32;
-    base |= (ty as u16 as u128) << (32 + 16);
+    base |= (privacy as u16 as u128) << PRIVACY_OFFSET;
+    base |= (ty as u16 as u128) << TY_OFFSET;
 
     KeyId::from_value(base)
 }
@@ -362,10 +365,12 @@ pub(crate) fn parse_key_id(
         return None;
     }
 
-    let ty = (((val & 0xFFFF << (32 + 16)) >> (32 + 16)) as u16)
+    let ty = (((val & 0xFFFF << TY_OFFSET) >> TY_OFFSET) as u16)
         .try_into()
         .ok()?;
-    let privacy = (((val & 0xFFFF << 32) >> 32) as u16).try_into().ok()?;
+    let privacy = (((val & 0xFFFF << PRIVACY_OFFSET) >> PRIVACY_OFFSET) as u16)
+        .try_into()
+        .ok()?;
 
     let id_value = val as u32;
     if !ID_RANGE.contains(&id_value) {
