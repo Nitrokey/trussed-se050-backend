@@ -29,8 +29,10 @@ use trussed::{
 };
 
 use crate::{
-    generate_object_id,
-    namespacing::{NamespaceValue, PersistentObjectId, VolatileObjectId, VolatileRsaObjectId},
+    namespacing::{
+        key_id_for_obj, parse_key_id, KeyType, NamespaceValue, ParsedObjectId, PersistentObjectId,
+        Privacy, VolatileObjectId, VolatileRsaObjectId,
+    },
     Context, Se050Backend, BACKEND_DIR,
 };
 
@@ -44,43 +46,23 @@ pub(crate) enum PersistentMaterial {
     VolatileRsa(VolatileRsaObjectId),
 }
 
-/// Persistent metadata for
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum PersistentMetadata {
-    /// The key is a standard non-transient key
-    None,
-    /// The key is a volatile (transient) ECC key
-    StandardVolatile,
-    /// The key is a volatile RSA key thas therefore is actually not transient and is protected by an intemediary AES key.
-    RsaVolatile { intermediary: ObjectId },
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct PersistentKeyMaterial {
-    object_id: ObjectId,
-    metatada: PersistentMetadata,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct VolatileKeyMaterial {
-    object_id: ObjectId,
+    object_id: VolatileObjectId,
     persistent_metadata: KeyId,
     exported_material: Bytes<1024>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct VolatileKeyMaterialRef<'a> {
-    object_id: ObjectId,
-    persistent_metadata: KeyId,
+    object_id: VolatileObjectId,
     #[serde(serialize_with = "serde_bytes::serialize")]
     exported_material: &'a [u8],
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct VolatileRsaKey {
-    object_id: ObjectId,
-    intermediary_object_id: ObjectId,
-    metadata_id: KeyId,
+    key_id: VolatileRsaObjectId,
     #[serde(with = "serde_byte_array")]
     intermediary_key: [u8; 16],
 }
@@ -117,29 +99,50 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     fn delete(
         &mut self,
         key: &KeyId,
+        ns: NamespaceValue,
         keystore: &mut impl Keystore,
     ) -> Result<reply::Delete, Error> {
-        // If the key is not found in the se050 keystore, pass the call to the core API
-        // The backend only stores secret keys (even public keys are actually the secret part)
-        let loaded_key = keystore
-            .load_key(Secrecy::Secret, None, key)
-            .or(Err(Error::MechanismNotAvailable))?;
-        let material: PersistentKeyMaterial =
-            cbor_smol::cbor_deserialize(&loaded_key.material).or(Err(Error::FunctionFailed))?;
-        match material.metatada {
-            PersistentMetadata::None | PersistentMetadata::StandardVolatile => {
-                self.delete_standard_key(material.object_id, key, keystore)
+        let (parsed_key, _parsed_ty, parsed_priv) = parse_key_id(*key, ns).unwrap();
+        match (parsed_key, parsed_priv) {
+            (
+                ParsedObjectId::Pin(_)
+                | ParsedObjectId::PinWithDerived(_)
+                | ParsedObjectId::SaltValue(_),
+                _,
+            ) => return Err(Error::ObjectHandleInvalid),
+            (ParsedObjectId::PersistentKey(PersistentObjectId(obj)), _) => {
+                self.delete_persistent_key(obj)
             }
-            PersistentMetadata::RsaVolatile { intermediary } => {
-                self.delete_volatile_rsa_key(material.object_id, intermediary, key, keystore)
+            (ParsedObjectId::VolatileKey(VolatileObjectId(obj)), Privacy::Secret) => {
+                self.delete_volatile_key(&key, obj, keystore)
+            }
+            (ParsedObjectId::VolatileKey(VolatileObjectId(_obj)), Privacy::Public) => {
+                // TODO Check that public key material stays for transient keys
+                // If not, we will need to read the public keys and store them when deriving
+                Ok(reply::Delete { success: true })
+            }
+            (ParsedObjectId::VolatileRsaKey(obj), Privacy::Secret) => {
+                self.delete_volatile_rsa_key(*key, obj, keystore)
+            }
+            (ParsedObjectId::VolatileRsaKey(_obj), Privacy::Public) => {
+                // Nothing to do since the public RSA key is actually the same object ID as the private key
+                Ok(reply::Delete { success: true })
             }
         }
     }
 
-    fn delete_standard_key(
+    fn delete_persistent_key(&mut self, object_id: ObjectId) -> Result<reply::Delete, Error> {
+        let buf = &mut [0; 1024];
+        self.se
+            .run_command(&DeleteSecureObject { object_id }, buf)
+            .or(Err(Error::FunctionFailed))?;
+        Ok(reply::Delete { success: true })
+    }
+
+    fn delete_volatile_key(
         &mut self,
-        object_id: ObjectId,
         key: &KeyId,
+        object_id: ObjectId,
         keystore: &mut impl Keystore,
     ) -> Result<reply::Delete, Error> {
         let buf = &mut [0; 1024];
@@ -153,16 +156,20 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
     fn delete_volatile_rsa_key(
         &mut self,
-        key: ObjectId,
-        intermediary: ObjectId,
-        metadata: &KeyId,
+        key: KeyId,
+        se_id: VolatileRsaObjectId,
         keystore: &mut impl Keystore,
     ) -> Result<reply::Delete, Error> {
         let buf = &mut [0; 1024];
 
         let exists = self
             .se
-            .run_command(&CheckObjectExists { object_id: key }, buf)
+            .run_command(
+                &CheckObjectExists {
+                    object_id: se_id.key_id(),
+                },
+                buf,
+            )
             .map_err(|_err| {
                 debug!("Failed existence check: {_err:?}");
                 Error::FunctionFailed
@@ -171,7 +178,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         if exists == Se05XResult::Success {
             debug!("Deleting key");
             self.se
-                .run_command(&DeleteSecureObject { object_id: key }, buf)
+                .run_command(
+                    &DeleteSecureObject {
+                        object_id: se_id.key_id(),
+                    },
+                    buf,
+                )
                 .map_err(|_err| {
                     debug!("Failed deletion: {_err:?}");
                     Error::FunctionFailed
@@ -182,7 +194,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         self.se
             .run_command(
                 &WriteUserId::builder()
-                    .object_id(key)
+                    .object_id(se_id.key_id())
                     .data(&hex!("01020304"))
                     .build(),
                 buf,
@@ -194,7 +206,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         debug!("Creating session");
         let session_id = self
             .se
-            .run_command(&CreateSession { object_id: key }, buf)
+            .run_command(
+                &CreateSession {
+                    object_id: se_id.key_id(),
+                },
+                buf,
+            )
             .map_err(|_err| {
                 debug!("Failed to create session: {_err:?}");
                 Error::FunctionFailed
@@ -222,7 +239,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 &ProcessSessionCmd {
                     session_id,
                     apdu: DeleteSecureObject {
-                        object_id: intermediary,
+                        object_id: se_id.intermediary_key_id(),
                     },
                 },
                 buf,
@@ -246,13 +263,18 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             })?;
         debug!("Deleting userid");
         self.se
-            .run_command(&DeleteSecureObject { object_id: key }, buf)
+            .run_command(
+                &DeleteSecureObject {
+                    object_id: se_id.key_id(),
+                },
+                buf,
+            )
             .map_err(|_err| {
                 debug!("Failed to delete user id: {_err:?}");
                 Error::FunctionFailed
             })?;
         Ok(reply::Delete {
-            success: keystore.delete_key(metadata),
+            success: keystore.delete_key(&key),
         })
     }
 
@@ -265,9 +287,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     ) -> Result<reply::GenerateKey, Error> {
         match req.attributes.persistence {
             Location::Volatile => self.generate_volatile_key(req, keystore, rng, ns),
-            Location::Internal | Location::External => {
-                self.generate_persistent_key(req, keystore, rng, ns)
-            }
+            Location::Internal | Location::External => self.generate_persistent_key(req, rng, ns),
         }
     }
 
@@ -284,8 +304,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Kind::Rsa2048 | Kind::Rsa3072 | Kind::Rsa4096
         ));
         let buf = &mut [0; 1024];
-        let real_key_id = generate_object_id(rng);
-        let intermediary_id = generate_object_id(rng);
+        let se_id = VolatileRsaObjectId::new(rng, ns);
 
         fn policy_for_intermediary(real_key: ObjectId) -> [Policy; 1] {
             [Policy {
@@ -326,8 +345,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 &WriteSymmKey::builder()
                     .is_auth(true)
                     .key_type(SymmKeyType::Aes)
-                    .policy(PolicySet(&policy_for_intermediary(real_key_id)))
-                    .object_id(intermediary_id)
+                    .policy(PolicySet(&policy_for_intermediary(se_id.key_id())))
+                    .object_id(se_id.intermediary_key_id())
                     .value(&key)
                     .build(),
                 buf,
@@ -337,36 +356,17 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             .run_command(
                 &WriteRsaKey::builder()
                     .key_type(P1KeyType::KeyPair)
-                    .policy(PolicySet(&policy_for_key(intermediary_id)))
-                    .object_id(real_key_id)
+                    .policy(PolicySet(&policy_for_key(se_id.intermediary_key_id())))
+                    .object_id(se_id.key_id())
                     .key_size(size.into())
                     .build(),
                 buf,
             )
             .or(Err(Error::FunctionFailed))?;
 
-        let metadata_material = cbor_serialize(
-            &PersistentKeyMaterial {
-                object_id: real_key_id,
-                metatada: PersistentMetadata::RsaVolatile {
-                    intermediary: intermediary_id,
-                },
-            },
-            buf,
-        )
-        .or(Err(Error::CborError))?;
-        let metadata_id = keystore.store_key(
-            self.key_metadata_location,
-            Secrecy::Secret,
-            kind,
-            metadata_material,
-        )?;
-
         let key_material = cbor_serialize(
             &VolatileRsaKey {
-                object_id: real_key_id,
-                intermediary_object_id: intermediary_id,
-                metadata_id,
+                key_id: se_id,
                 intermediary_key: key,
             },
             buf,
@@ -383,10 +383,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         rng: &mut R,
         ns: NamespaceValue,
     ) -> Result<reply::GenerateKey, Error> {
-        let kind = match req.mechanism {
-            Mechanism::Ed255 => Kind::Ed255,
-            Mechanism::X255 => Kind::X255,
-            Mechanism::P256 => Kind::P256,
+        let (kind, ty) = match req.mechanism {
+            Mechanism::Ed255 => (Kind::Ed255, KeyType::Ed255),
+            Mechanism::X255 => (Kind::X255, KeyType::X255),
+            Mechanism::P256 => (Kind::P256, KeyType::P256),
             Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => {
                 return self.generate_volatile_rsa_key(keystore, 2048, Kind::Rsa2048, rng, ns);
             }
@@ -401,52 +401,36 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         };
 
         let buf = &mut [0; 1024];
-        let object_id = generate_object_id(rng);
+        let object_id = VolatileObjectId::new(rng, ns);
 
         match req.mechanism {
             Mechanism::Ed255 => self
                 .se
-                .run_command(&generate_ed255(object_id, true), buf)
+                .run_command(&generate_ed255(object_id.0, true), buf)
                 .or(Err(Error::FunctionFailed))?,
             Mechanism::X255 => self
                 .se
-                .run_command(&generate_ed255(object_id, true), buf)
+                .run_command(&generate_ed255(object_id.0, true), buf)
                 .or(Err(Error::FunctionFailed))?,
             // TODO First write curve somehow
             Mechanism::P256 => self
                 .se
-                .run_command(&generate_ed255(object_id, true), buf)
+                .run_command(&generate_ed255(object_id.0, true), buf)
                 .or(Err(Error::FunctionFailed))?,
             _ => unreachable!(),
         }
-        let metadata_material = cbor_serialize(
-            &PersistentKeyMaterial {
-                object_id,
-                metatada: PersistentMetadata::StandardVolatile,
-            },
-            buf,
-        )
-        .or(Err(Error::CborError))?;
-        let metadata_id = keystore.store_key(
-            req.attributes.persistence,
-            Secrecy::Secret,
-            kind,
-            metadata_material,
-        )?;
         let exported = self
             .se
-            .run_command(&ExportObject::builder().object_id(object_id).build(), buf)
+            .run_command(&ExportObject::builder().object_id(object_id.0).build(), buf)
             .or(Err(Error::FunctionFailed))?
             .data;
+        let key = key_id_for_obj(object_id.0, Privacy::Secret, ty);
         let material: Bytes<1024> = trussed::cbor_serialize_bytes(&VolatileKeyMaterialRef {
             object_id,
-            persistent_metadata: metadata_id,
             exported_material: exported,
         })
         .or(Err(Error::FunctionFailed))?;
-        let key = keystore
-            .store_key(Location::Volatile, Secrecy::Secret, kind, &material)
-            .or(Err(Error::FunctionFailed))?;
+        keystore.overwrite_key(Location::Volatile, Secrecy::Secret, kind, &key, &material)?;
 
         // Remove any data from the transient storage
         self.se.enable().or(Err(Error::FunctionFailed))?;
@@ -456,71 +440,62 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     fn generate_persistent_key<R: CryptoRng + RngCore>(
         &mut self,
         req: &request::GenerateKey,
-        keystore: &mut impl Keystore,
         rng: &mut R,
         ns: NamespaceValue,
     ) -> Result<reply::GenerateKey, Error> {
         let buf = &mut [0; 1024];
-        let object_id = generate_object_id(rng);
+        let object_id = PersistentObjectId::new(rng, ns);
 
         match req.mechanism {
             Mechanism::Ed255 => self
                 .se
-                .run_command(&generate_ed255(object_id, false), buf)
+                .run_command(&generate_ed255(object_id.0, false), buf)
                 .or(Err(Error::FunctionFailed))?,
 
             Mechanism::X255 => self
                 .se
-                .run_command(&generate_x255(object_id, false), buf)
+                .run_command(&generate_x255(object_id.0, false), buf)
                 .or(Err(Error::FunctionFailed))?,
 
             // TODO First write curve somehow
             Mechanism::P256 => self
                 .se
-                .run_command(&generate_p256(object_id, false), buf)
+                .run_command(&generate_p256(object_id.0, false), buf)
                 .or(Err(Error::FunctionFailed))?,
             Mechanism::P256Prehashed => return Err(Error::MechanismParamInvalid),
             Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => self
                 .se
-                .run_command(&generate_rsa(object_id, 2048), buf)
+                .run_command(&generate_rsa(object_id.0, 2048), buf)
                 .or(Err(Error::FunctionFailed))?,
             Mechanism::Rsa3072Raw | Mechanism::Rsa3072Pkcs1v15 => self
                 .se
-                .run_command(&generate_rsa(object_id, 3072), buf)
+                .run_command(&generate_rsa(object_id.0, 3072), buf)
                 .or(Err(Error::FunctionFailed))?,
             Mechanism::Rsa4096Raw | Mechanism::Rsa4096Pkcs1v15 => self
                 .se
-                .run_command(&generate_rsa(object_id, 4096), buf)
+                .run_command(&generate_rsa(object_id.0, 4096), buf)
                 .or(Err(Error::FunctionFailed))?,
             // Other mechanisms are filtered through the `supported` function
             _ => unreachable!(),
         }
 
-        let kind = match req.mechanism {
-            Mechanism::Ed255 => Kind::Ed255,
+        let ty = match req.mechanism {
+            Mechanism::Ed255 => KeyType::Ed255,
 
-            Mechanism::X255 => Kind::X255,
+            Mechanism::X255 => KeyType::X255,
 
             // TODO First write curve somehow
-            Mechanism::P256 => Kind::P256,
-            Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => Kind::Rsa2048,
-            Mechanism::Rsa3072Raw | Mechanism::Rsa3072Pkcs1v15 => Kind::Rsa3072,
-            Mechanism::Rsa4096Raw | Mechanism::Rsa4096Pkcs1v15 => Kind::Rsa4096,
+            Mechanism::P256 => KeyType::P256,
+            Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => KeyType::Rsa2048,
+            Mechanism::Rsa3072Raw | Mechanism::Rsa3072Pkcs1v15 => KeyType::Rsa3072,
+            Mechanism::Rsa4096Raw | Mechanism::Rsa4096Pkcs1v15 => KeyType::Rsa4096,
             // Other mechanisms are filtered through the `supported` function
             _ => unreachable!(),
         };
 
-        let material = cbor_serialize(
-            &PersistentKeyMaterial {
-                object_id,
-                metatada: PersistentMetadata::None,
-            },
-            buf,
-        )
-        .or(Err(Error::CborError))?;
-        let key =
-            keystore.store_key(req.attributes.persistence, Secrecy::Secret, kind, material)?;
-        Ok(reply::GenerateKey { key })
+        Ok(reply::GenerateKey {
+            key: key_id_for_obj(object_id.0, Privacy::Secret, ty),
+        })
     }
 
     fn agree(
@@ -528,36 +503,36 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         req: &request::Agree,
         se050_keystore: &mut impl Keystore,
         core_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
     ) -> Result<reply::Agree, Error> {
-        match se050_keystore
-            .location(Secrecy::Secret, &req.private_key)
-            .ok_or(Error::ObjectHandleInvalid)?
-        {
-            Location::Volatile => self.agree_volatile(req, se050_keystore, core_keystore),
-            Location::Internal | Location::External => {
-                self.agree_persistent(req, se050_keystore, core_keystore)
+        let (parsed_key, parsed_ty, parsed_priv) = parse_key_id(req.private_key, ns).unwrap();
+        if parsed_priv != Privacy::Secret {
+            return Err(Error::ObjectHandleInvalid);
+        }
+
+        match parsed_key {
+            ParsedObjectId::VolatileKey(obj) => {
+                self.agree_volatile(req, obj, parsed_ty, se050_keystore, core_keystore)
             }
+            ParsedObjectId::PersistentKey(obj) => {
+                self.agree_persistent(req, obj, parsed_ty, core_keystore)
+            }
+            _ => Err(Error::ObjectHandleInvalid),
         }
     }
 
     fn agree_persistent(
         &mut self,
         req: &request::Agree,
-        se050_keystore: &mut impl Keystore,
+        key: PersistentObjectId,
+        ty: KeyType,
         core_keystore: &mut impl Keystore,
     ) -> Result<reply::Agree, Error> {
-        let kind = match req.mechanism {
-            Mechanism::P256 => Kind::P256,
-            Mechanism::X255 => Kind::X255,
+        let kind = match (req.mechanism, ty) {
+            (Mechanism::P256, KeyType::P256) => Kind::P256,
+            (Mechanism::X255, KeyType::X255) => Kind::X255,
             _ => return Err(Error::MechanismParamInvalid),
         };
-
-        let priv_key = se050_keystore.load_key(Secrecy::Secret, Some(kind), &req.private_key)?;
-        let priv_key: PersistentKeyMaterial =
-            cbor_smol::cbor_deserialize(&priv_key.material).or(Err(Error::CborError))?;
-        if !matches!(priv_key.metatada, PersistentMetadata::None) {
-            return Err(Error::FunctionFailed);
-        }
 
         let pub_key = core_keystore.load_key(Secrecy::Public, Some(kind), &req.public_key)?;
 
@@ -567,7 +542,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             .se
             .run_command(
                 &EcdhGenerateSharedSecret {
-                    key_id: priv_key.object_id,
+                    key_id: key.0,
                     public_key: &pub_key.material,
                 },
                 buf,
@@ -599,18 +574,27 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     fn agree_volatile(
         &mut self,
         req: &request::Agree,
+        obj_id: VolatileObjectId,
+        ty: KeyType,
         se050_keystore: &mut impl Keystore,
         core_keystore: &mut impl Keystore,
     ) -> Result<reply::Agree, Error> {
-        let kind = match req.mechanism {
-            Mechanism::P256 => Kind::P256,
-            Mechanism::X255 => Kind::X255,
+        let kind = match (req.mechanism, ty) {
+            (Mechanism::P256, KeyType::P256) => Kind::P256,
+            (Mechanism::X255, KeyType::X255) => Kind::X255,
             _ => return Err(Error::MechanismParamInvalid),
         };
 
         let priv_key = se050_keystore.load_key(Secrecy::Secret, Some(kind), &req.private_key)?;
         let priv_key: VolatileKeyMaterialRef =
             cbor_smol::cbor_deserialize(&priv_key.material).or(Err(Error::CborError))?;
+        if priv_key.object_id != obj_id {
+            error!(
+                "Incorrect object id: {:02x?} {:02x?}",
+                priv_key.object_id, obj_id
+            );
+            return Err(Error::FunctionFailed);
+        }
 
         let pub_key = core_keystore.load_key(Secrecy::Public, Some(kind), &req.public_key)?;
 
@@ -619,7 +603,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         self.se
             .run_command(
                 &ImportObject::builder()
-                    .object_id(priv_key.object_id)
+                    .object_id(priv_key.object_id.0)
                     .serialized_object(priv_key.exported_material)
                     .build(),
                 buf,
@@ -630,7 +614,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             .se
             .run_command(
                 &EcdhGenerateSharedSecret {
-                    key_id: priv_key.object_id,
+                    key_id: *priv_key.object_id,
                     public_key: &pub_key.material,
                 },
                 buf,
@@ -745,13 +729,15 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
         Ok(match request {
             Request::RandomBytes(request::RandomBytes { count }) => self.random_bytes(*count)?,
             Request::Agree(req) if supported(req.mechanism) => {
-                self.agree(req, se050_keystore, core_keystore)?.into()
+                self.agree(req, se050_keystore, core_keystore, ns)?.into()
             }
             Request::Decrypt(req) if supported(req.mechanism) => todo!(),
             Request::DeriveKey(req) if supported(req.mechanism) => todo!(),
             Request::DeserializeKey(req) if supported(req.mechanism) => todo!(),
             Request::Encrypt(req) if supported(req.mechanism) => todo!(),
-            Request::Delete(request::Delete { key }) => self.delete(key, se050_keystore)?.into(),
+            Request::Delete(request::Delete { key }) => {
+                self.delete(key, ns, se050_keystore)?.into()
+            }
             Request::Clear(_req) => todo!(),
             Request::DeleteAllKeys(_req) => todo!(),
             Request::Exists(req) if supported(req.mechanism) => todo!(),

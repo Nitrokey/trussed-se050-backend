@@ -4,12 +4,8 @@ use core::ops::Range;
 
 use embedded_hal::blocking::delay::DelayUs;
 use littlefs2::path::Path;
-use namespacing::{namespace, Namespace, NamespaceValue, ObjectKind};
-use rand::{CryptoRng, Rng, RngCore};
-use se05x::{
-    se05x::{ObjectId, Se05X},
-    t1::I2CForT1,
-};
+use namespacing::{Namespace, NamespaceValue};
+use se05x::{se05x::Se05X, t1::I2CForT1};
 use trussed::{types::Location, Bytes};
 
 #[macro_use]
@@ -45,8 +41,6 @@ pub struct Se050Backend<Twi, D> {
     enabled: bool,
     failed_enable: Option<se05x::se05x::Error>,
     metadata_location: Location,
-    /// Contains metadata for volatile keys that are not deleted.
-    key_metadata_location: Location,
     hw_key: HardwareKey,
     ns: Namespace,
 }
@@ -55,7 +49,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     pub fn new(
         se: Se05X<Twi, D>,
         metadata_location: Location,
-        key_metadata_location: Location,
         hardware_key: Option<Bytes<{ MAX_HW_KEY_LEN }>>,
         ns: Namespace,
     ) -> Self {
@@ -64,7 +57,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             enabled: false,
             failed_enable: None,
             metadata_location,
-            key_metadata_location,
             hw_key: match hardware_key {
                 None => HardwareKey::None,
                 Some(k) => HardwareKey::Raw(k),
@@ -114,11 +106,6 @@ impl Context {
 pub struct ContextNs<'a> {
     auth: &'a mut AuthContext,
     ns: NamespaceValue,
-}
-
-#[deprecated]
-fn generate_object_id<R: RngCore + CryptoRng>(rng: &mut R) -> ObjectId {
-    ObjectId(rng.gen_range(0x00000002u32..0x7FFF0000).to_be_bytes())
 }
 
 const ID_RANGE: Range<u32> = 0x000000FF..0x7FFF0000;

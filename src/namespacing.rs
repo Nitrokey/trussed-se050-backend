@@ -210,6 +210,7 @@ macro_rules! wrapper {
             }
         }
 
+        #[allow(unused)]
         impl $name {
             pub fn new<R: RngCore + CryptoRng>(rng: &mut R, ns: NamespaceValue) -> Self {
                 Self(generate_object_id_ns(rng, ns, $kind))
