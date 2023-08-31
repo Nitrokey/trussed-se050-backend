@@ -17,7 +17,7 @@ use trussed_auth::MAX_HW_KEY_LEN;
 use trussed_auth_impl::{AuthContext, HardwareKey};
 
 mod core_api;
-mod namespacing;
+pub mod namespacing;
 
 /// Need overhead for TLV + SW bytes
 const BACKEND_DIR: &str = "se050-bak";

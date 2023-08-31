@@ -708,6 +708,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
         request: &Request,
         resources: &mut trussed::service::ServiceResources<P>,
     ) -> Result<trussed::Reply, Error> {
+        Err(Error::RequestNotAvailable)?;
         self.enable()?;
         debug_now!("Trussed Auth request: {request:?}");
 

@@ -147,7 +147,7 @@ pub struct NamespaceItem {
 }
 
 /// A namespace.
-pub struct Namespace(&'static [NamespaceItem]);
+pub struct Namespace(pub &'static [NamespaceItem]);
 
 impl Namespace {
     pub fn for_client(&self, client_id: &Path) -> Option<NamespaceValue> {
