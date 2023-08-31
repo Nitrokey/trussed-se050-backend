@@ -1,5 +1,5 @@
 use crate::{
-    namespacing::{NamespaceValue, PinObjectId},
+    namespacing::{NamespaceValue, PinObjectId, PinObjectIdWithDerived},
     trussed_auth_impl::KEY_LEN,
 };
 
@@ -30,6 +30,21 @@ use trussed::{
     types::{Bytes, Location, Path, PathBuf},
 };
 use trussed_auth::{request, PinId, MAX_PIN_LENGTH};
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+enum PinSeId {
+    Raw(PinObjectId),
+    WithDerived(PinObjectIdWithDerived),
+}
+
+impl PinSeId {
+    fn pin_id(&self) -> ObjectId {
+        match self {
+            PinSeId::Raw(i) => i.0,
+            PinSeId::WithDerived(i) => i.pin_id(),
+        }
+    }
+}
 
 fn app_salt_path() -> PathBuf {
     const SALT_PATH: &str = "application_salt";
@@ -115,8 +130,7 @@ pub(crate) struct PinData {
     id: PinId,
     salt: Salt,
     /// Id of the AES key authentication object for the PIN
-    se_id: PinObjectId,
-    derived_key: bool,
+    se_id: PinSeId,
 }
 
 fn simple_pin_policy(pin_aes_key_id: ObjectId) -> [Policy; 2] {
@@ -166,13 +180,11 @@ impl PinData {
         derived_key: bool,
     ) -> Self {
         let salt = ByteArray::new(rng.gen());
-        let pin_aes_key_id = PinObjectId::new(rng, ns);
-        Self {
-            id,
-            salt,
-            se_id: pin_aes_key_id,
-            derived_key,
-        }
+        let se_id = match derived_key {
+            true => PinSeId::WithDerived(PinObjectIdWithDerived::new(rng, ns)),
+            false => PinSeId::Raw(PinObjectId::new(rng, ns)),
+        };
+        Self { id, salt, se_id }
     }
 
     pub fn save(&self, fs: &mut impl Filestore, location: Location) -> Result<(), Error> {
@@ -201,31 +213,34 @@ impl PinData {
         let pin_aes_key_policy;
         // So that temporary arrays are scoped to the function to please the borrow checker
         let (tmp1, tmp2);
-        if self.derived_key {
-            tmp1 = pin_policy_with_key(self.se_id.pin_id(), self.se_id.protected_key_id());
-            pin_aes_key_policy = &tmp1;
+        match self.se_id {
+            PinSeId::WithDerived(se_id) => {
+                tmp1 = pin_policy_with_key(se_id.pin_id(), se_id.protected_key_id());
+                pin_aes_key_policy = &tmp1;
 
-            let protected_key_policy = &key_policy(self.se_id.pin_id());
-            let key = se050.run_command(
-                &GetRandom {
-                    length: (KEY_LEN as u16).into(),
-                },
-                buf,
-            )?;
-            let key: Key = ByteArray::new(key.data.try_into().map_err(|_| Error::Se050)?);
-            se050.run_command(
-                &WriteBinary::builder()
-                    .object_id(self.se_id.protected_key_id())
-                    .policy(PolicySet(protected_key_policy))
-                    .offset(0.into())
-                    .file_length((KEY_LEN as u16).into())
-                    .data(&*key)
-                    .build(),
-                buf,
-            )?;
-        } else {
-            tmp2 = simple_pin_policy(self.se_id.pin_id());
-            pin_aes_key_policy = &tmp2;
+                let protected_key_policy = &key_policy(se_id.pin_id());
+                let key = se050.run_command(
+                    &GetRandom {
+                        length: (KEY_LEN as u16).into(),
+                    },
+                    buf,
+                )?;
+                let key: Key = ByteArray::new(key.data.try_into().map_err(|_| Error::Se050)?);
+                se050.run_command(
+                    &WriteBinary::builder()
+                        .object_id(se_id.protected_key_id())
+                        .policy(PolicySet(protected_key_policy))
+                        .offset(0.into())
+                        .file_length((KEY_LEN as u16).into())
+                        .data(&*key)
+                        .build(),
+                    buf,
+                )?;
+            }
+            PinSeId::Raw(se_id) => {
+                tmp2 = simple_pin_policy(se_id.0);
+                pin_aes_key_policy = &tmp2;
+            }
         }
         let write = WriteSymmKey::builder()
             .is_auth(true)
@@ -258,14 +273,18 @@ impl PinData {
         let this = Self::new(id, ns, rng, true);
         this.save(fs, location)?;
 
+        let PinSeId::WithDerived(se_id) = this.se_id else {
+            unreachable!()
+        };
+
         let buf = &mut [0; 128];
         let pin_aes_key_value = expand_pin_key(&this.salt, app_key, this.id, value);
 
-        let protected_key_id = this.se_id.protected_key_id();
+        let protected_key_id = se_id.protected_key_id();
 
-        let pin_aes_key_policy = &pin_policy_with_key(this.se_id.pin_id(), protected_key_id);
+        let pin_aes_key_policy = &pin_policy_with_key(se_id.pin_id(), protected_key_id);
 
-        let protected_key_policy = &key_policy(this.se_id.pin_id());
+        let protected_key_policy = &key_policy(se_id.pin_id());
         se050.run_command(
             &WriteBinary::builder()
                 .object_id(protected_key_id)
@@ -281,7 +300,7 @@ impl PinData {
             .is_auth(true)
             .key_type(SymmKeyType::Aes)
             .policy(PolicySet(pin_aes_key_policy))
-            .object_id(this.se_id.pin_id())
+            .object_id(se_id.pin_id())
             .value(&*pin_aes_key_value);
         let write = match retries {
             None => write.build(),
@@ -332,7 +351,7 @@ impl PinData {
         se050: &mut Se05X<Twi, D>,
         rng: &mut R,
     ) -> Result<Option<Key>, Error> {
-        if !self.derived_key {
+        let PinSeId::WithDerived(se_id) = self.se_id else {
             return Err(Error::BadPinType);
         };
 
@@ -340,7 +359,7 @@ impl PinData {
         let pin_aes_key_value = expand_pin_key(&self.salt, app_key, self.id, value);
         let res = se050.run_command(
             &CreateSession {
-                object_id: self.se_id.pin_id(),
+                object_id: se_id.pin_id(),
             },
             buf,
         )?;
@@ -351,7 +370,7 @@ impl PinData {
                     &ProcessSessionCmd {
                         session_id,
                         apdu: ReadObject::builder()
-                            .object_id(self.se_id.protected_key_id())
+                            .object_id(se_id.protected_key_id())
                             .length((KEY_LEN as u16).into())
                             .build(),
                     },
@@ -441,100 +460,98 @@ impl PinData {
     ) -> Result<(), Error> {
         let buf = &mut [0; 1024];
         debug!("Deleting {self:02x?}");
-        if self.derived_key {
-            debug!("checking existence");
-            let exists = se050
-                .run_command(
-                    &CheckObjectExists {
-                        object_id: self.se_id.protected_key_id(),
-                    },
-                    buf,
-                )
-                .map_err(|_err| {
-                    debug!("Failed existence check: {_err:?}");
-                    _err
-                })?
-                .result;
-            if exists == Se05XResult::Success {
-                debug!("Deleting key");
-                se050
+        match self.se_id {
+            PinSeId::WithDerived(se_id) => {
+                debug!("checking existence");
+                let exists = se050
                     .run_command(
-                        &DeleteSecureObject {
-                            object_id: self.se_id.protected_key_id(),
+                        &CheckObjectExists {
+                            object_id: se_id.protected_key_id(),
                         },
                         buf,
                     )
                     .map_err(|_err| {
-                        debug!("Failed deletion: {_err:?}");
+                        debug!("Failed existence check: {_err:?}");
                         _err
-                    })?;
-            }
+                    })?
+                    .result;
+                if exists == Se05XResult::Success {
+                    debug!("Deleting key");
+                    se050
+                        .run_command(
+                            &DeleteSecureObject {
+                                object_id: se_id.protected_key_id(),
+                            },
+                            buf,
+                        )
+                        .map_err(|_err| {
+                            debug!("Failed deletion: {_err:?}");
+                            _err
+                        })?;
+                }
 
-            debug!("Writing userid ");
-            se050.run_command(
-                &WriteUserId::builder()
-                    .object_id(self.se_id.protected_key_id())
-                    .data(&hex!("01020304"))
-                    .build(),
-                buf,
-            )?;
-            debug!("Creating session");
-            let session_id = se050
-                .run_command(
-                    &CreateSession {
-                        object_id: self.se_id.protected_key_id(),
-                    },
+                debug!("Writing userid ");
+                se050.run_command(
+                    &WriteUserId::builder()
+                        .object_id(se_id.protected_key_id())
+                        .data(&hex!("01020304"))
+                        .build(),
                     buf,
-                )?
-                .session_id;
-            debug!("Auth session");
-            se050.run_command(
-                &ProcessSessionCmd {
-                    session_id,
-                    apdu: VerifySessionUserId {
-                        user_id: &hex!("01020304"),
-                    },
-                },
-                buf,
-            )?;
-            debug!("Deleting auth");
-            se050
-                .run_command(
+                )?;
+                debug!("Creating session");
+                let session_id = se050
+                    .run_command(
+                        &CreateSession {
+                            object_id: se_id.protected_key_id(),
+                        },
+                        buf,
+                    )?
+                    .session_id;
+                debug!("Auth session");
+                se050.run_command(
                     &ProcessSessionCmd {
                         session_id,
-                        apdu: DeleteSecureObject {
-                            object_id: self.se_id.pin_id(),
+                        apdu: VerifySessionUserId {
+                            user_id: &hex!("01020304"),
                         },
                     },
                     buf,
-                )
-                .map_err(|_err| {
-                    debug!("Failed to delete auth: {_err:?}");
-                    _err
-                })?;
-            debug!("Closing sess");
-            se050.run_command(
-                &ProcessSessionCmd {
-                    session_id,
-                    apdu: CloseSession {},
-                },
-                buf,
-            )?;
-            debug!("Deleting userid");
-            se050.run_command(
-                &DeleteSecureObject {
-                    object_id: self.se_id.protected_key_id(),
-                },
-                buf,
-            )?;
-        } else {
-            debug!("Deleting simple");
-            se050.run_command(
-                &DeleteSecureObject {
-                    object_id: self.se_id.pin_id(),
-                },
-                buf,
-            )?;
+                )?;
+                debug!("Deleting auth");
+                se050
+                    .run_command(
+                        &ProcessSessionCmd {
+                            session_id,
+                            apdu: DeleteSecureObject {
+                                object_id: se_id.pin_id(),
+                            },
+                        },
+                        buf,
+                    )
+                    .map_err(|_err| {
+                        debug!("Failed to delete auth: {_err:?}");
+                        _err
+                    })?;
+                debug!("Closing sess");
+                se050.run_command(
+                    &ProcessSessionCmd {
+                        session_id,
+                        apdu: CloseSession {},
+                    },
+                    buf,
+                )?;
+                debug!("Deleting userid");
+                se050.run_command(
+                    &DeleteSecureObject {
+                        object_id: se_id.protected_key_id(),
+                    },
+                    buf,
+                )?;
+            }
+            PinSeId::Raw(se_id) => {
+                debug!("Deleting simple");
+                se050.run_command(&DeleteSecureObject { object_id: se_id.0 }, buf)?;
+            }
         }
 
         debug!("Removing file");

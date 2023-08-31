@@ -97,19 +97,47 @@ enum_number! {
         Reserved = 0x0,
         /// The AES authentication object that is used to verify PINS
         PinAesKey = 0x1,
+        /// The AES authentication object that is used to verify PINS for a PIN that has an associated AES key
+        PinAesKeyWithDerived = 0x2,
         /// The BinaryObject that is read-protected by the PIN of same ID but PinAesKey type
-        PinProtectedBinObject = 0x2,
+        PinProtectedBinObject = 0x3,
         /// A persistent key
-        PersistentKey = 0x3,
+        PersistentKey = 0x4,
         /// A volatile key. The private key data is cleared unless the key is currently in use
-        VolatileKey = 0x4,
+        VolatileKey = 0x5,
         /// A "volatile" RSA key. Since RSA keys are too large to fit in the SE050 volatile memory, they are auctally stored in persistent storage, and protected by a AES authentication object
-        VolatileRsaKey = 0x5,
+        VolatileRsaKey = 0x6,
         /// The AES authentication object that protects the Volatile RSA key of same id.
-        VolatileRsaIntermediary = 0x6,
+        VolatileRsaIntermediary = 0x7,
         /// Salt value  stored on the SE050
         SaltValue = 0xF,
     }
+}
+
+macro_rules! enum_from {
+    (
+        $(#[$outer:meta])*
+        $vis:vis enum $name:ident {
+            $($(#[$doc:meta])* $var:ident($ty:tt)),+
+            $(,)*
+        }
+    ) => {
+        $(#[$outer])*
+        $vis enum $name {
+            $(
+                $(#[$doc])*
+                $var($ty),
+            )*
+        }
+
+        $(
+            impl From<$ty> for $name {
+                fn from(value: $ty) -> $name {
+                    $name::$var(value)
+                }
+            }
+        )*
+    };
 }
 
 /// A namespace Item
@@ -156,7 +184,7 @@ mod tests {
     fn namespace_byte() {
         assert_eq!(
             namespace(NamespaceValue::Client8, ObjectKind::VolatileKey),
-            0x84
+            0x85
         );
 
         for ns in NamespaceValue::all() {
@@ -207,8 +235,9 @@ fn generate_object_id_ns<R: RngCore + CryptoRng>(
 }
 
 wrapper!(PinObjectId, ObjectKind::PinAesKey);
+wrapper!(PinObjectIdWithDerived, ObjectKind::PinAesKeyWithDerived);
 
-impl PinObjectId {
+impl PinObjectIdWithDerived {
     pub(crate) fn pin_id(&self) -> ObjectId {
         self.0
     }
@@ -227,35 +256,52 @@ impl PinObjectId {
 wrapper!(PersistentObjectId, ObjectKind::PersistentKey);
 wrapper!(VolatileObjectId, ObjectKind::VolatileKey);
 wrapper!(VolatileRsaObjectId, ObjectKind::VolatileRsaKey);
+
+impl VolatileRsaObjectId {
+    pub(crate) fn key_id(&self) -> ObjectId {
+        self.0
+    }
+
+    pub(crate) fn intermediary_key_id(&self) -> ObjectId {
+        let mut base = self.0 .0;
+        base[3] += 1;
+        assert_eq!(
+            parse_namespace(base[3]).unwrap().1,
+            ObjectKind::VolatileRsaIntermediary
+        );
+        ObjectId(base)
+    }
+}
+
 wrapper!(SaltValueObjectId, ObjectKind::VolatileRsaKey);
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ParsedObjectId {
-    Pin(PinObjectId),
-    PersistentKey(PersistentObjectId),
-    VolatileKey(VolatileObjectId),
-    VolatileRsaKey(VolatileRsaObjectId),
-    SaltValue(SaltValueObjectId),
-}
+enum_from!(
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub(crate) enum ParsedObjectId {
+        Pin(PinObjectId),
+        PinWithDerived(PinObjectIdWithDerived),
+        PersistentKey(PersistentObjectId),
+        VolatileKey(VolatileObjectId),
+        VolatileRsaKey(VolatileRsaObjectId),
+        SaltValue(SaltValueObjectId),
+    }
+);
 
 impl ParsedObjectId {
     fn parse(id: ObjectId) -> Option<(NamespaceValue, ParsedObjectId)> {
         let (ns, kind) = parse_namespace(id.0[3])?;
         let parsed = match kind {
             ObjectKind::Reserved => return None,
-            ObjectKind::PinAesKey | ObjectKind::PinProtectedBinObject => {
-                ParsedObjectId::Pin(PinObjectId::from_value(id))
+            ObjectKind::PinAesKey => PinObjectIdWithDerived::from_value(id).into(),
+            ObjectKind::PinAesKeyWithDerived | ObjectKind::PinProtectedBinObject => {
+                PinObjectIdWithDerived::from_value(id).into()
             }
-            ObjectKind::PersistentKey => {
-                ParsedObjectId::PersistentKey(PersistentObjectId::from_value(id))
-            }
-            ObjectKind::VolatileKey => {
-                ParsedObjectId::VolatileKey(VolatileObjectId::from_value(id))
-            }
+            ObjectKind::PersistentKey => PersistentObjectId::from_value(id).into(),
+            ObjectKind::VolatileKey => VolatileObjectId::from_value(id).into(),
             ObjectKind::VolatileRsaKey | ObjectKind::VolatileRsaIntermediary => {
-                ParsedObjectId::VolatileRsaKey(VolatileRsaObjectId::from_value(id))
+                VolatileRsaObjectId::from_value(id).into()
             }
-            ObjectKind::SaltValue => ParsedObjectId::SaltValue(SaltValueObjectId::from_value(id)),
+            ObjectKind::SaltValue => SaltValueObjectId::from_value(id).into(),
         };
         Some((ns, parsed))
     }
@@ -339,10 +385,10 @@ mod tests2 {
     use super::*;
     #[test]
     fn key_ids() {
-        let obj_id = PinObjectId::from_value(ObjectId(0x0ABBCCDDu32.to_be_bytes()));
+        let obj_id = PinObjectIdWithDerived::from_value(ObjectId(0x0ABBCCDDu32.to_be_bytes()));
         assert!(ID_RANGE.contains(&u32::from_be_bytes(obj_id.0 .0)));
         assert_eq!(
-            KeyId::from_value(0xCAFE42424242CAFE000400010ABBCCD1u128),
+            KeyId::from_value(0xCAFE42424242CAFE000400010ABBCCD2u128),
             key_id_for_obj(*obj_id, Privacy::Public, KeyType::Rsa2048)
         );
 
@@ -351,7 +397,7 @@ mod tests2 {
             for p in Privacy::all() {
                 let key_id = key_id_for_obj(*obj_id, *p, *ty);
                 let (parsed_key, parsed_ty, parsed_priv) = parse_key_id(key_id, ns).unwrap();
-                assert_eq!(parsed_key, ParsedObjectId::Pin(obj_id));
+                assert_eq!(parsed_key, ParsedObjectId::PinWithDerived(obj_id));
                 assert_eq!(parsed_ty, *ty);
                 assert_eq!(parsed_priv, *p)
             }
