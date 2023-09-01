@@ -4,7 +4,7 @@ use littlefs2::{path, path::Path};
 use se05x::{
     se05x::{
         commands::{CreateSession, DeleteAll, VerifySessionUserId, WriteUserId},
-        ObjectId, ProcessSessionCmd,
+        ObjectId,
     },
     t1::I2CForT1,
 };
@@ -123,11 +123,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                     })?;
 
                 self.se
-                    .run_command(
-                        &ProcessSessionCmd {
-                            session_id: session.session_id,
-                            apdu: VerifySessionUserId { user_id: data },
-                        },
+                    .run_session_command(
+                        session.session_id,
+                        &VerifySessionUserId { user_id: data },
                         &mut buf,
                     )
                     .map_err(|_err| {
@@ -136,13 +134,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                     })?;
 
                 self.se
-                    .run_command(
-                        &ProcessSessionCmd {
-                            session_id: session.session_id,
-                            apdu: DeleteAll {},
-                        },
-                        &mut buf,
-                    )
+                    .run_session_command(session.session_id, &DeleteAll {}, &mut buf)
                     .map_err(|_err| {
                         debug_now!("Failed to factory reset: {_err:?}");
                         Error::FunctionFailed

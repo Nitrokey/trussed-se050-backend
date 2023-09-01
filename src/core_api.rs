@@ -13,7 +13,7 @@ use se05x::{
             WriteEcKey, WriteRsaKey, WriteSymmKey, WriteUserId,
         },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
-        EcCurve, ObjectId, P1KeyType, ProcessSessionCmd, Se05XResult, SymmKeyType,
+        EcCurve, ObjectId, P1KeyType, Se05XResult, SymmKeyType,
     },
     t1::I2CForT1,
 };
@@ -219,12 +219,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             .session_id;
         debug!("Auth session");
         self.se
-            .run_command(
-                &ProcessSessionCmd {
-                    session_id,
-                    apdu: VerifySessionUserId {
-                        user_id: &hex!("01020304"),
-                    },
+            .run_session_command(
+                session_id,
+                &VerifySessionUserId {
+                    user_id: &hex!("01020304"),
                 },
                 buf,
             )
@@ -235,12 +233,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
         debug!("Deleting auth");
         self.se
-            .run_command(
-                &ProcessSessionCmd {
-                    session_id,
-                    apdu: DeleteSecureObject {
-                        object_id: se_id.intermediary_key_id(),
-                    },
+            .run_session_command(
+                session_id,
+                &DeleteSecureObject {
+                    object_id: se_id.intermediary_key_id(),
                 },
                 buf,
             )
@@ -250,13 +246,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             })?;
         debug!("Closing sess");
         self.se
-            .run_command(
-                &ProcessSessionCmd {
-                    session_id,
-                    apdu: CloseSession {},
-                },
-                buf,
-            )
+            .run_session_command(session_id, &CloseSession {}, buf)
             .map_err(|_err| {
                 debug!("Failed to close session: {_err:?}");
                 Error::FunctionFailed

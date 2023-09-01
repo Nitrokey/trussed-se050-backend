@@ -17,7 +17,7 @@ use se05x::{
             ReadObject, VerifySessionUserId, WriteBinary, WriteSymmKey, WriteUserId,
         },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
-        ObjectId, ProcessSessionCmd, Se05X, Se05XResult, SymmKeyType,
+        ObjectId, Se05X, Se05XResult, SymmKeyType,
     },
     t1::I2CForT1,
 };
@@ -335,13 +335,7 @@ impl PinData {
             }
         };
         se050
-            .run_command(
-                &ProcessSessionCmd {
-                    session_id,
-                    apdu: CloseSession {},
-                },
-                buf,
-            )
+            .run_session_command(session_id, &CloseSession {}, buf)
             .map_err(|err| {
                 debug_now!("Failed to close session: {err:?}");
                 err
@@ -372,14 +366,12 @@ impl PinData {
         let session_id = res.session_id;
         let res = match se050.authenticate_aes128_session(session_id, &pin_aes_key_value, rng) {
             Ok(true) => {
-                let key = se050.run_command(
-                    &ProcessSessionCmd {
-                        session_id,
-                        apdu: ReadObject::builder()
-                            .object_id(se_id.protected_key_id())
-                            .length((KEY_LEN as u16).into())
-                            .build(),
-                    },
+                let key = se050.run_session_command(
+                    session_id,
+                    &ReadObject::builder()
+                        .object_id(se_id.protected_key_id())
+                        .length((KEY_LEN as u16).into())
+                        .build(),
                     buf,
                 )?;
                 Ok(Some(
@@ -391,13 +383,7 @@ impl PinData {
             Ok(false) => Ok(None),
             Err(err) => Err(err.into()),
         };
-        se050.run_command(
-            &ProcessSessionCmd {
-                session_id,
-                apdu: CloseSession {},
-            },
-            buf,
-        )?;
+        se050.run_session_command(session_id, &CloseSession {}, buf)?;
         res
     }
 
@@ -423,26 +409,18 @@ impl PinData {
 
         self.salt = ByteArray::new(rng.gen());
         let new_pin_aes_key_value = expand_pin_key(&self.salt, app_key, self.id, &request.new_pin);
-        se050.run_command(
-            &ProcessSessionCmd {
-                session_id,
-                apdu: WriteSymmKey::builder()
-                    .is_auth(true)
-                    .key_type(SymmKeyType::Aes)
-                    .object_id(self.se_id.pin_id())
-                    .value(&*new_pin_aes_key_value)
-                    .build(),
-            },
+        se050.run_session_command(
+            session_id,
+            &WriteSymmKey::builder()
+                .is_auth(true)
+                .key_type(SymmKeyType::Aes)
+                .object_id(self.se_id.pin_id())
+                .value(&*new_pin_aes_key_value)
+                .build(),
             buf,
         )?;
         self.save(fs, location)?;
-        se050.run_command(
-            &ProcessSessionCmd {
-                session_id,
-                apdu: CloseSession {},
-            },
-            buf,
-        )?;
+        se050.run_session_command(session_id, &CloseSession {}, buf)?;
         res.map_err(Into::into)
     }
 
@@ -512,23 +490,19 @@ impl PinData {
                     )?
                     .session_id;
                 debug!("Auth session");
-                se050.run_command(
-                    &ProcessSessionCmd {
-                        session_id,
-                        apdu: VerifySessionUserId {
-                            user_id: &hex!("01020304"),
-                        },
+                se050.run_session_command(
+                    session_id,
+                    &VerifySessionUserId {
+                        user_id: &hex!("01020304"),
                     },
                     buf,
                 )?;
                 debug!("Deleting auth");
                 se050
-                    .run_command(
-                        &ProcessSessionCmd {
-                            session_id,
-                            apdu: DeleteSecureObject {
-                                object_id: se_id.pin_id(),
-                            },
+                    .run_session_command(
+                        session_id,
+                        &DeleteSecureObject {
+                            object_id: se_id.pin_id(),
                         },
                         buf,
                     )
@@ -537,13 +511,7 @@ impl PinData {
                         _err
                     })?;
                 debug!("Closing sess");
-                se050.run_command(
-                    &ProcessSessionCmd {
-                        session_id,
-                        apdu: CloseSession {},
-                    },
-                    buf,
-                )?;
+                se050.run_session_command(session_id, &CloseSession {}, buf)?;
                 debug!("Deleting userid");
                 se050
                     .run_command(
