@@ -86,6 +86,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
         request: &<ManageExtension as Extension>::Request,
         resources: &mut ServiceResources<P>,
     ) -> Result<<ManageExtension as Extension>::Reply, Error> {
+        self.enable().map_err(|err| {
+            debug_now!("Failed to enable for management: {err:?}");
+            err
+        })?;
         match request {
             ManageRequest::FactoryReset(_) => {
                 let mut buf = [b'a'; 128];
@@ -101,7 +105,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                         },
                         &mut buf,
                     )
-                    .or(Err(Error::FunctionFailed))?;
+                    .map_err(|_err| {
+                        debug_now!("Failed to write factory reset user id: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
                 let session = self
                     .se
                     .run_command(
@@ -110,7 +117,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                         },
                         &mut buf,
                     )
-                    .or(Err(Error::FunctionFailed))?;
+                    .map_err(|_err| {
+                        debug_now!("Failed to create reset session: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
 
                 self.se
                     .run_command(
@@ -120,7 +130,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                         },
                         &mut buf,
                     )
-                    .or(Err(Error::FunctionFailed))?;
+                    .map_err(|_err| {
+                        debug_now!("Failed to verify reset session: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
 
                 self.se
                     .run_command(
@@ -130,19 +143,28 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                         },
                         &mut buf,
                     )
-                    .or(Err(Error::FunctionFailed))?;
+                    .map_err(|_err| {
+                        debug_now!("Failed to factory reset: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
 
                 let platform = resources.platform();
                 let store = platform.store();
                 let ifs = &*store.ifs();
                 let efs = &*store.efs();
                 let vfs = &*store.vfs();
-                ifs.remove_dir_all(path!(""))
-                    .or(Err(Error::FunctionFailed))?;
-                efs.remove_dir_all(path!(""))
-                    .or(Err(Error::FunctionFailed))?;
-                vfs.remove_dir_all(path!(""))
-                    .or(Err(Error::FunctionFailed))?;
+                ifs.remove_dir_all(path!("/")).map_err(|_err| {
+                    debug_now!("Failed to delete ifs: {_err:?}");
+                    Error::FunctionFailed
+                })?;
+                efs.remove_dir_all(path!("/")).map_err(|_err| {
+                    debug_now!("Failed to delete efs: {_err:?}");
+                    Error::FunctionFailed
+                })?;
+                vfs.remove_dir_all(path!("/")).map_err(|_err| {
+                    debug_now!("Failed to delete vfs: {_err:?}");
+                    Error::FunctionFailed
+                })?;
                 Ok(FactoryResetReply.into())
             }
         }
@@ -159,3 +181,5 @@ pub trait ManageClient: ExtensionClient<ManageExtension> {
         self.extension(FactoryResetRequest)
     }
 }
+
+impl<C: ExtensionClient<ManageExtension>> ManageClient for C {}
