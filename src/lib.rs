@@ -17,6 +17,7 @@ use trussed_auth::MAX_HW_KEY_LEN;
 use trussed_auth_impl::{AuthContext, HardwareKey};
 
 mod core_api;
+pub mod manage;
 pub mod namespacing;
 
 /// Need overhead for TLV + SW bytes
