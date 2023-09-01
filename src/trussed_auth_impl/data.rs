@@ -328,19 +328,25 @@ impl PinData {
         )?;
         let session_id = res.session_id;
         let res = match se050.authenticate_aes128_session(session_id, &pin_aes_key_value, rng) {
-            Ok(()) => Ok(true),
-            Err(_err) => {
-                debug_now!("Failed to authenticate pin: {_err:?}");
-                Ok(false)
+            Ok(res) => Ok(res),
+            Err(err) => {
+                debug_now!("Failed to authenticate pin: {err:?}");
+                Err(err.into())
             }
         };
-        se050.run_command(
-            &ProcessSessionCmd {
-                session_id,
-                apdu: CloseSession {},
-            },
-            buf,
-        )?;
+        se050
+            .run_command(
+                &ProcessSessionCmd {
+                    session_id,
+                    apdu: CloseSession {},
+                },
+                buf,
+            )
+            .map_err(|err| {
+                debug_now!("Failed to close session: {err:?}");
+                err
+            })?;
+        debug_now!("Check succeeded with {res:?}");
         res
     }
 
@@ -365,7 +371,7 @@ impl PinData {
         )?;
         let session_id = res.session_id;
         let res = match se050.authenticate_aes128_session(session_id, &pin_aes_key_value, rng) {
-            Ok(()) => {
+            Ok(true) => {
                 let key = se050.run_command(
                     &ProcessSessionCmd {
                         session_id,
@@ -382,7 +388,8 @@ impl PinData {
                         .map_err(|_| Error::DeserializationFailed)?,
                 ))
             }
-            Err(_) => Ok(None),
+            Ok(false) => Ok(None),
+            Err(err) => Err(err.into()),
         };
         se050.run_command(
             &ProcessSessionCmd {
@@ -412,10 +419,7 @@ impl PinData {
             buf,
         )?;
         let session_id = res.session_id;
-        let res = match se050.authenticate_aes128_session(session_id, &pin_aes_key_value, rng) {
-            Ok(()) => Ok(true),
-            Err(_) => Ok(false),
-        };
+        let res = se050.authenticate_aes128_session(session_id, &pin_aes_key_value, rng);
 
         self.salt = ByteArray::new(rng.gen());
         let new_pin_aes_key_value = expand_pin_key(&self.salt, app_key, self.id, &request.new_pin);
@@ -439,7 +443,7 @@ impl PinData {
             },
             buf,
         )?;
-        res
+        res.map_err(Into::into)
     }
 
     pub fn load(id: PinId, fs: &mut impl Filestore, location: Location) -> Result<Self, Error> {
@@ -541,12 +545,17 @@ impl PinData {
                     buf,
                 )?;
                 debug!("Deleting userid");
-                se050.run_command(
-                    &DeleteSecureObject {
-                        object_id: se_id.protected_key_id(),
-                    },
-                    buf,
-                )?;
+                se050
+                    .run_command(
+                        &DeleteSecureObject {
+                            object_id: se_id.protected_key_id(),
+                        },
+                        buf,
+                    )
+                    .map_err(|err| {
+                        debug!("Failed to delete user id: {err:?}");
+                        err
+                    })?;
             }
             PinSeId::Raw(se_id) => {
                 debug!("Deleting simple");
