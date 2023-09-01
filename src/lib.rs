@@ -5,7 +5,10 @@ use core::ops::Range;
 use embedded_hal::blocking::delay::DelayUs;
 use littlefs2::path::Path;
 use namespacing::{Namespace, NamespaceValue};
-use se05x::{se05x::Se05X, t1::I2CForT1};
+use se05x::{
+    se05x::{commands::ReadEcCurveList, EcCurve, Se05X},
+    t1::I2CForT1,
+};
 use trussed::{types::Location, Bytes};
 
 #[macro_use]
@@ -44,6 +47,7 @@ pub struct Se050Backend<Twi, D> {
     metadata_location: Location,
     hw_key: HardwareKey,
     ns: Namespace,
+    configured: bool,
 }
 
 impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
@@ -63,6 +67,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Some(k) => HardwareKey::Raw(k),
             },
             ns,
+            configured: false,
         }
     }
 
@@ -80,6 +85,44 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             error!("Enabling failed: {:?}", _e);
             return Err(trussed::Error::FunctionFailed);
         }
+
+        Ok(())
+    }
+
+    fn reselect(&mut self) -> Result<(), trussed::Error> {
+        if let Err(e) = self.se.enable() {
+            self.failed_enable = Some(e);
+        } else {
+            self.failed_enable = None;
+            self.enabled = true;
+        }
+        Ok(())
+    }
+
+    fn configure(&mut self) -> Result<(), trussed::Error> {
+        const REQUIRED_CURVES: [EcCurve; 1] = [EcCurve::NistP256];
+        self.enable()?;
+        if self.configured {
+            return Ok(());
+        }
+        let buf = &mut [0; 1024];
+        let configured_curves = self
+            .se
+            .run_command(&ReadEcCurveList {}, buf)
+            .map_err(|_err| {
+                debug!("Failed to list curves: {_err:?}");
+                trussed::Error::FunctionFailed
+            })?;
+        for i in REQUIRED_CURVES {
+            if !configured_curves.ids.contains(&i.into()) {
+                self.se.create_and_set_curve(i).map_err(|_err| {
+                    debug!("Failed to create curve: {_err:?}");
+                    trussed::Error::FunctionFailed
+                })?;
+            }
+        }
+
+        self.configured = true;
 
         Ok(())
     }

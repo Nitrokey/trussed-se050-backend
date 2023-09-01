@@ -86,7 +86,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
         request: &<ManageExtension as Extension>::Request,
         resources: &mut ServiceResources<P>,
     ) -> Result<<ManageExtension as Extension>::Reply, Error> {
-        self.enable().map_err(|err| {
+        self.configure().map_err(|err| {
             debug_now!("Failed to enable for management: {err:?}");
             err
         })?;

@@ -36,6 +36,7 @@ pub const GLOBAL_SALT_ID: ObjectId = ObjectId([
     0,
     namespace(NamespaceValue::NoClient, ObjectKind::SaltValue),
 ]);
+
 pub(crate) const SALT_LEN: usize = 16;
 pub(crate) const HASH_LEN: usize = 32;
 pub(crate) const KEY_LEN: usize = 32;
@@ -261,7 +262,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
         <trussed_auth::AuthExtension as trussed::serde_extensions::Extension>::Reply,
         trussed::Error,
     > {
-        self.enable()?;
+        self.configure()?;
         let backend_ctx = backend_ctx.with_namespace(&self.ns, &core_ctx.path);
         let auth_ctx = backend_ctx.auth;
         let ns = backend_ctx.ns;

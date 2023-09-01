@@ -423,7 +423,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         keystore.overwrite_key(Location::Volatile, Secrecy::Secret, kind, &key, &material)?;
 
         // Remove any data from the transient storage
-        self.se.enable().or(Err(Error::FunctionFailed))?;
+        self.reselect()?;
         Ok(reply::GenerateKey { key })
     }
 
@@ -613,7 +613,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             .shared_secret;
 
         // Clear volatile data
-        self.se.enable().or(Err(Error::FunctionFailed))?;
+        self.reselect()?;
 
         let flags = if req.attributes.serializable {
             key::Flags::SERIALIZABLE
@@ -699,7 +699,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
         resources: &mut trussed::service::ServiceResources<P>,
     ) -> Result<trussed::Reply, Error> {
         Err(Error::RequestNotAvailable)?;
-        self.enable()?;
+        self.configure()?;
         debug_now!("Trussed Auth request: {request:?}");
 
         // FIXME: Have a real implementation from trussed
