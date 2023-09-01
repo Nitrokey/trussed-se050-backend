@@ -107,6 +107,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             (
                 ParsedObjectId::Pin(_)
                 | ParsedObjectId::PinWithDerived(_)
+                | ParsedObjectId::AttestKey(_)
                 | ParsedObjectId::SaltValue(_),
                 _,
             ) => return Err(Error::ObjectHandleInvalid),

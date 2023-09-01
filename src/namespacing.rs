@@ -110,6 +110,8 @@ enum_number! {
         /// The AES authentication object that protects the Volatile RSA key of same id.
         VolatileRsaIntermediary = 0x7,
         /// Salt value  stored on the SE050
+        AttestKey = 0xE,
+        /// Salt value  stored on the SE050
         SaltValue = 0xF,
     }
 }
@@ -257,6 +259,7 @@ impl PinObjectIdWithDerived {
 wrapper!(PersistentObjectId, ObjectKind::PersistentKey);
 wrapper!(VolatileObjectId, ObjectKind::VolatileKey);
 wrapper!(VolatileRsaObjectId, ObjectKind::VolatileRsaKey);
+wrapper!(AttestKeyObjectId, ObjectKind::AttestKey);
 
 impl VolatileRsaObjectId {
     pub(crate) fn key_id(&self) -> ObjectId {
@@ -285,6 +288,7 @@ enum_from!(
         VolatileKey(VolatileObjectId),
         VolatileRsaKey(VolatileRsaObjectId),
         SaltValue(SaltValueObjectId),
+        AttestKey(AttestKeyObjectId),
     }
 );
 
@@ -302,6 +306,7 @@ impl ParsedObjectId {
             ObjectKind::VolatileRsaKey | ObjectKind::VolatileRsaIntermediary => {
                 VolatileRsaObjectId::from_value(id).into()
             }
+            ObjectKind::AttestKey => AttestKeyObjectId::from_value(id).into(),
             ObjectKind::SaltValue => SaltValueObjectId::from_value(id).into(),
         };
         Some((ns, parsed))
