@@ -327,13 +327,12 @@ impl PinData {
             buf,
         )?;
         let session_id = res.session_id;
-        let res = match se050.authenticate_aes128_session(session_id, &pin_aes_key_value, rng) {
-            Ok(res) => Ok(res),
-            Err(err) => {
+        let res = se050
+            .authenticate_aes128_session(session_id, &pin_aes_key_value, rng)
+            .map_err(|err| {
                 debug_now!("Failed to authenticate pin: {err:?}");
-                Err(err.into())
-            }
-        };
+                err
+            })?;
         se050
             .run_session_command(session_id, &CloseSession {}, buf)
             .map_err(|err| {
@@ -341,7 +340,7 @@ impl PinData {
                 err
             })?;
         debug_now!("Check succeeded with {res:?}");
-        res
+        Ok(res)
     }
 
     pub fn check_and_get_key<Twi: I2CForT1, D: DelayUs<u32>, R: RngCore + CryptoRng>(
@@ -405,7 +404,7 @@ impl PinData {
             buf,
         )?;
         let session_id = res.session_id;
-        let res = se050.authenticate_aes128_session(session_id, &pin_aes_key_value, rng);
+        let res = se050.authenticate_aes128_session(session_id, &pin_aes_key_value, rng)?;
 
         self.salt = ByteArray::new(rng.gen());
         let new_pin_aes_key_value = expand_pin_key(&self.salt, app_key, self.id, &request.new_pin);
@@ -421,7 +420,7 @@ impl PinData {
         )?;
         self.save(fs, location)?;
         se050.run_session_command(session_id, &CloseSession {}, buf)?;
-        res.map_err(Into::into)
+        Ok(res)
     }
 
     pub fn load(id: PinId, fs: &mut impl Filestore, location: Location) -> Result<Self, Error> {
@@ -434,104 +433,115 @@ impl PinData {
         Ok(Self { id, ..this })
     }
 
+    pub fn delete_with_derived<Twi: I2CForT1, D: DelayUs<u32>>(
+        se050: &mut Se05X<Twi, D>,
+        se_id: PinObjectIdWithDerived,
+    ) -> Result<(), Error> {
+        let buf = &mut [0; 1024];
+        debug!("checking existence");
+        let exists = se050
+            .run_command(
+                &CheckObjectExists {
+                    object_id: se_id.protected_key_id(),
+                },
+                buf,
+            )
+            .map_err(|_err| {
+                debug!("Failed existence check: {_err:?}");
+                _err
+            })?
+            .result;
+        if exists == Se05XResult::Success {
+            debug!("Deleting key");
+            se050
+                .run_command(
+                    &DeleteSecureObject {
+                        object_id: se_id.protected_key_id(),
+                    },
+                    buf,
+                )
+                .map_err(|_err| {
+                    debug!("Failed deletion: {_err:?}");
+                    _err
+                })?;
+        }
+
+        debug!("Writing userid ");
+        se050.run_command(
+            &WriteUserId::builder()
+                .object_id(se_id.protected_key_id())
+                .data(&hex!("01020304"))
+                .policy(PolicySet(&[Policy {
+                    object_id: ObjectId::INVALID,
+                    access_rule: ObjectAccessRule::from_flags(ObjectPolicyFlags::ALLOW_DELETE),
+                }]))
+                .build(),
+            buf,
+        )?;
+        debug!("Creating session");
+        let session_id = se050
+            .run_command(
+                &CreateSession {
+                    object_id: se_id.protected_key_id(),
+                },
+                buf,
+            )?
+            .session_id;
+        debug!("Auth session");
+        se050.run_session_command(
+            session_id,
+            &VerifySessionUserId {
+                user_id: &hex!("01020304"),
+            },
+            buf,
+        )?;
+        debug!("Deleting auth");
+        se050
+            .run_session_command(
+                session_id,
+                &DeleteSecureObject {
+                    object_id: se_id.pin_id(),
+                },
+                buf,
+            )
+            .map_err(|_err| {
+                debug!("Failed to delete auth: {_err:?}");
+                _err
+            })?;
+        debug!("Closing sess");
+        se050.run_session_command(session_id, &CloseSession {}, buf)?;
+        debug!("Deleting userid");
+        se050
+            .run_command(
+                &DeleteSecureObject {
+                    object_id: se_id.protected_key_id(),
+                },
+                buf,
+            )
+            .map_err(|err| {
+                debug!("Failed to delete user id: {err:?}");
+                err
+            })?;
+        Ok(())
+    }
+
     pub fn delete<Twi: I2CForT1, D: DelayUs<u32>>(
         self,
         fs: &mut impl Filestore,
         location: Location,
         se050: &mut Se05X<Twi, D>,
     ) -> Result<(), Error> {
-        let buf = &mut [0; 1024];
-        debug!("Deleting {self:02x?}");
+        debug_now!("Deleting {self:02x?}");
         match self.se_id {
-            PinSeId::WithDerived(se_id) => {
-                debug!("checking existence");
-                let exists = se050
-                    .run_command(
-                        &CheckObjectExists {
-                            object_id: se_id.protected_key_id(),
-                        },
-                        buf,
-                    )
-                    .map_err(|_err| {
-                        debug!("Failed existence check: {_err:?}");
-                        _err
-                    })?
-                    .result;
-                if exists == Se05XResult::Success {
-                    debug!("Deleting key");
-                    se050
-                        .run_command(
-                            &DeleteSecureObject {
-                                object_id: se_id.protected_key_id(),
-                            },
-                            buf,
-                        )
-                        .map_err(|_err| {
-                            debug!("Failed deletion: {_err:?}");
-                            _err
-                        })?;
-                }
-
-                debug!("Writing userid ");
-                se050.run_command(
-                    &WriteUserId::builder()
-                        .object_id(se_id.protected_key_id())
-                        .data(&hex!("01020304"))
-                        .build(),
-                    buf,
-                )?;
-                debug!("Creating session");
-                let session_id = se050
-                    .run_command(
-                        &CreateSession {
-                            object_id: se_id.protected_key_id(),
-                        },
-                        buf,
-                    )?
-                    .session_id;
-                debug!("Auth session");
-                se050.run_session_command(
-                    session_id,
-                    &VerifySessionUserId {
-                        user_id: &hex!("01020304"),
-                    },
-                    buf,
-                )?;
-                debug!("Deleting auth");
-                se050
-                    .run_session_command(
-                        session_id,
-                        &DeleteSecureObject {
-                            object_id: se_id.pin_id(),
-                        },
-                        buf,
-                    )
-                    .map_err(|_err| {
-                        debug!("Failed to delete auth: {_err:?}");
-                        _err
-                    })?;
-                debug!("Closing sess");
-                se050.run_session_command(session_id, &CloseSession {}, buf)?;
-                debug!("Deleting userid");
-                se050
-                    .run_command(
-                        &DeleteSecureObject {
-                            object_id: se_id.protected_key_id(),
-                        },
-                        buf,
-                    )
-                    .map_err(|err| {
-                        debug!("Failed to delete user id: {err:?}");
-                        err
-                    })?;
-            }
+            PinSeId::WithDerived(se_id) => Self::delete_with_derived(se050, se_id)?,
             PinSeId::Raw(se_id) => {
-                debug!("Deleting simple");
+                let buf = &mut [0; 1024];
+                debug_now!("Deleting simple");
                 se050.run_command(&DeleteSecureObject { object_id: se_id.0 }, buf)?;
             }
         }
 
-        debug!("Removing file");
+        debug_now!("Removing file {}", self.id.path());
         fs.remove_file(&self.id.path(), location).map_err(|_err| {
             debug!("Removing file failed: {_err:?}");
             Error::WriteFailed
@@ -550,8 +560,8 @@ fn delete_from_path<Twi: I2CForT1, D: DelayUs<u32>>(
     let path = path
         .as_ref()
         .strip_prefix(path.parent().as_deref().map(AsRef::as_ref).unwrap_or(""))
+        .and_then(|path| path.strip_prefix('/'))
         .unwrap_or(path.as_ref());
-    let path = path.strip_prefix('/').unwrap_or(path.as_ref());
     debug!("Deleting stripped: {path:?}");
     let id = path.parse().map_err(|_err| {
         debug!("Parsing name failed: {_err:?}");
@@ -571,20 +581,13 @@ pub(crate) fn delete_all_pins<Twi: I2CForT1, D: DelayUs<u32>>(
     se050: &mut Se05X<Twi, D>,
 ) -> Result<(), Error> {
     debug!("Deleting all pins");
-    let Some((first, mut state)) = fs
+    while let Some((entry, _)) = fs
         .read_dir_first(path!(""), location, None)
         .map_err(|_| Error::ReadFailed)?
-    else {
-        return Ok(());
-    };
-    debug!("ReadFirst");
-    delete_from_path(first.path(), fs, location, se050)?;
-    debug!("DeletedFirst");
-
-    while let Some((entry, new_state)) = fs.read_dir_next(state).map_err(|_| Error::ReadFailed)? {
-        debug!("DeletingNext");
-        state = new_state;
+    {
+        debug_now!("Deleting {}", entry.path());
         delete_from_path(entry.path(), fs, location, se050)?;
     }
+
     Ok(())
 }
