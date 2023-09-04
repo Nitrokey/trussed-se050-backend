@@ -389,8 +389,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 Ok(reply::DeleteAllPins.into())
             }
             AuthRequest::PinRetries(request) => {
+                debug_now!("Getting pin retries");
                 let pin_data = PinData::load(request.id, fs, self.metadata_location)?;
-                let (attempts, max) = pin_data.get_attempts(&mut self.se)?;
+                debug_now!("Loaded {pin_data:?}");
+                let (attempts, max) = pin_data.get_attempts(&mut self.se, rng)?;
+                debug_now!("Attempts: {attempts:?}, {max:?}");
                 Ok(reply::PinRetries {
                     retries: Some((max - attempts) as u8),
                 }

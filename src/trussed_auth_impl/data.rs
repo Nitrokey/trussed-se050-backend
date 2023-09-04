@@ -15,8 +15,8 @@ use se05x::{
     se05x::{
         commands::{
             CheckObjectExists, CloseSession, CreateSession, DeleteSecureObject, GetRandom,
-            ReadAttestObject, ReadObject, VerifySessionUserId, WriteBinary, WriteSymmKey,
-            WriteUserId,
+            ReadAttestObject, ReadAttributesAttest, ReadObject, VerifySessionUserId, WriteBinary,
+            WriteSymmKey, WriteUserId,
         },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
         AttestationAlgo, ObjectId, Se05X, Se05XResult, SymmKeyType,
@@ -552,9 +552,10 @@ impl PinData {
     }
 
     /// Returns (tried, max)
-    pub fn get_attempts<Twi: I2CForT1, D: DelayUs<u32>>(
+    pub fn get_attempts<Twi: I2CForT1, D: DelayUs<u32>, R: RngCore + CryptoRng>(
         self,
         se050: &mut Se05X<Twi, D>,
+        rng: &mut R,
     ) -> Result<(u16, u16), Error> {
         let buf = &mut [0u8; 128];
         let attrs = se050
@@ -562,10 +563,15 @@ impl PinData {
                 &ReadAttestObject::builder()
                     .object_id(self.se_id.pin_id())
                     .attestation_object(GLOBAL_ATTEST_ID)
-                    .attestation_algo(AttestationAlgo::ECdsaSha256)
+                    .attestation_algo(AttestationAlgo::ECdsaSha512)
+                    .freshness_random(&rng.gen())
                     .build(),
                 buf,
-            )?
+            )
+            .map_err(|err| {
+                debug_now!("Got err: {err:?}");
+                err
+            })?
             .attributes;
         let max = attrs.max_authentication_attempts();
         let attempts = attrs.authentication_attempts_counter();

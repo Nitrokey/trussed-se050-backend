@@ -111,7 +111,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     }
 
     fn configure(&mut self) -> Result<(), trussed::Error> {
-        const REQUIRED_CURVES: [EcCurve; 1] = [EcCurve::NistP256];
+        const REQUIRED_CURVES: [EcCurve; 2] = [EcCurve::NistP256, EcCurve::NistP521];
         self.enable()?;
         if self.configured {
             return Ok(());
@@ -152,7 +152,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 .run_command(
                     &WriteEcKey::builder()
                         .key_type(P1KeyType::KeyPair)
-                        .curve(EcCurve::NistP256)
+                        .curve(EcCurve::NistP521)
                         .policy(PolicySet(&[Policy {
                             object_id: ObjectId::INVALID,
                             access_rule: ObjectAccessRule::from_flags(
