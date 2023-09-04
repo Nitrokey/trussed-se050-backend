@@ -54,7 +54,7 @@ pub enum HardwareKey {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Error {
-    NotFound,
+    _NotFound,
     ReadFailed,
     WriteFailed,
     DeserializationFailed,
@@ -66,7 +66,7 @@ pub(crate) enum Error {
 impl From<Error> for trussed::error::Error {
     fn from(error: Error) -> Self {
         match error {
-            Error::NotFound => Self::NoSuchKey,
+            Error::_NotFound => Self::NoSuchKey,
             Error::ReadFailed => Self::FilesystemReadFailure,
             Error::WriteFailed => Self::FilesystemWriteFailure,
             Error::DeserializationFailed => Self::ImplementationError,
@@ -389,13 +389,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 Ok(reply::DeleteAllPins.into())
             }
             AuthRequest::PinRetries(request) => {
-                if !fs.exists(&request.id.path(), self.metadata_location) {
-                    Err(Error::NotFound)?;
+                let pin_data = PinData::load(request.id, fs, self.metadata_location)?;
+                let (attempts, max) = pin_data.get_attempts(&mut self.se)?;
+                Ok(reply::PinRetries {
+                    retries: Some((max - attempts) as u8),
                 }
-                // TODO find a way to make this work
-                //
-                // It looks like reading with attestation can give access to this metadata
-                Ok(reply::PinRetries { retries: Some(3) }.into())
+                .into())
             }
             AuthRequest::ResetAppKeys(_req) => {
                 delete_app_salt(fs, self.metadata_location)?;

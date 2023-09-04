@@ -1,6 +1,7 @@
 use crate::{
     namespacing::{NamespaceValue, PinObjectId, PinObjectIdWithDerived},
     trussed_auth_impl::KEY_LEN,
+    GLOBAL_ATTEST_ID,
 };
 
 use super::{Error, Key, Salt, HASH_LEN, SALT_LEN};
@@ -14,10 +15,11 @@ use se05x::{
     se05x::{
         commands::{
             CheckObjectExists, CloseSession, CreateSession, DeleteSecureObject, GetRandom,
-            ReadObject, VerifySessionUserId, WriteBinary, WriteSymmKey, WriteUserId,
+            ReadAttestObject, ReadObject, VerifySessionUserId, WriteBinary, WriteSymmKey,
+            WriteUserId,
         },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
-        ObjectId, Se05X, Se05XResult, SymmKeyType,
+        AttestationAlgo, ObjectId, Se05X, Se05XResult, SymmKeyType,
     },
     t1::I2CForT1,
 };
@@ -547,6 +549,27 @@ impl PinData {
             Error::WriteFailed
         })?;
         Ok(())
+    }
+
+    /// Returns (tried, max)
+    pub fn get_attempts<Twi: I2CForT1, D: DelayUs<u32>>(
+        self,
+        se050: &mut Se05X<Twi, D>,
+    ) -> Result<(u16, u16), Error> {
+        let buf = &mut [0u8; 128];
+        let attrs = se050
+            .run_command(
+                &ReadAttestObject::builder()
+                    .object_id(self.se_id.pin_id())
+                    .attestation_object(GLOBAL_ATTEST_ID)
+                    .attestation_algo(AttestationAlgo::ECdsaSha256)
+                    .build(),
+                buf,
+            )?
+            .attributes;
+        let max = attrs.max_authentication_attempts();
+        let attempts = attrs.authentication_attempts_counter();
+        Ok((attempts, max))
     }
 }
 
