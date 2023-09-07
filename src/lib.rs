@@ -3,6 +3,7 @@
 use core::ops::Range;
 
 use embedded_hal::blocking::delay::DelayUs;
+use hex_literal::hex;
 use littlefs2::path::Path;
 use namespacing::{namespace, Namespace, NamespaceValue, ObjectKind};
 use se05x::{
@@ -30,12 +31,7 @@ pub mod namespacing;
 /// Need overhead for TLV + SW bytes
 const BACKEND_DIR: &str = "se050-bak";
 
-pub const GLOBAL_ATTEST_ID: ObjectId = ObjectId([
-    0,
-    0,
-    0,
-    namespace(NamespaceValue::NoClient, ObjectKind::AttestKey),
-]);
+pub const GLOBAL_ATTEST_ID: ObjectId = ObjectId(hex!("F0000012"));
 
 pub enum Se05xLocation {
     Persistent,
@@ -132,44 +128,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 })?;
             }
         }
-
-        if self
-            .se
-            .run_command(
-                &CheckObjectExists {
-                    object_id: GLOBAL_ATTEST_ID,
-                },
-                buf,
-            )
-            .map_err(|_err| {
-                debug!("Failed to check existence of attest: {_err:?}");
-                trussed::Error::FunctionFailed
-            })?
-            .result
-            != Se05XResult::Success
-        {
-            self.se
-                .run_command(
-                    &WriteEcKey::builder()
-                        .key_type(P1KeyType::KeyPair)
-                        .curve(EcCurve::NistP521)
-                        .policy(PolicySet(&[Policy {
-                            object_id: ObjectId::INVALID,
-                            access_rule: ObjectAccessRule::from_flags(
-                                ObjectPolicyFlags::ALLOW_ATTESTATION
-                                    | ObjectPolicyFlags::ALLOW_READ,
-                            ),
-                        }]))
-                        .object_id(GLOBAL_ATTEST_ID)
-                        .build(),
-                    buf,
-                )
-                .map_err(|_err| {
-                    debug!("Failed to create attest key: {_err:?}");
-                    trussed::Error::FunctionFailed
-                })?;
-        }
-
         self.configured = true;
 
         Ok(())
