@@ -6,18 +6,26 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-se05x = "0.0.1"
+se05x = { version  = "0.0.1", features = ["serde", "builder"] }
 trussed = { version = "0.1.0", features = ["serde-extensions"] }
-trussed-auth = "0.2.2"
-trussed-staging = { version = "0.1.0", features = ["wrap-key-to-file", "chunked", "encrypted-chunked"] }
 delog = "0.1.6"
 embedded-hal = "0.2.7"
+hex-literal = "0.4.1"
+serde-byte-array = "0.1.2"
+iso7816 = "0.1.1"
+hmac = "0.12.1"
+serde = { version = "1.0.185", default-features = false, features = ["derive"] }
+rand = { version = "0.8.5", default-features = false }
+littlefs2 = "0.4.0"
+cbor-smol = "0.4.0"
+serde_bytes = { version = "0.11.12", default-features = false }
+rand_chacha = { version = "0.3.1", default-features = false }
 
 [patch.crates-io]
-se05x = { git = "https://github.com/Nitrokey/se05x.git", rev = "db1ddea25cc382355b4292352652da656abc3005"} 
-trussed = { git = "https://github.com/Nitrokey/trussed", tag = "v0.1.0-nitrokey.12" }
-trussed-auth = { git = "https://github.com/Nitrokey/trussed-auth", tag = "v0.2.2-nitrokey.1" }
-trussed-staging = { git = "https://github.com/Nitrokey/trussed-staging.git", branch = "hmacsha256p256" }
+se05x = { git = "https://github.com/Nitrokey/se05x.git", rev = "0b77eb6b152d214897696aadf87767fd84ffcb0e"} 
+trussed = { git = "https://github.com/Nitrokey/trussed", rev = "6b9a43fbaaf34fe8d69fac0021f8130dd9a436c9" }
+trussed-auth = { git = "https://github.com/Nitrokey/trussed-auth", rev = "49c13eae6d9a225676191d4776d514848e4eab5b" }
+trussed-staging = { git = "https://github.com/Nitrokey/trussed-staging.git", rev = "83e33925f1edcc1f20ae9cc4a44fffe487c9fa69" }
 iso7816 = { git = "https://github.com/sosthene-nitrokey/iso7816.git", rev = "160ca3bbd8e21ec4e4ee1e0748e1eaa53a45c97f"}
 
 [features]
