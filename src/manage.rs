@@ -105,3 +105,5 @@ pub trait ManageClient: ExtensionClient<ManageExtension> {
         self.extension(TestSe050Request)
     }
 }
+
+impl<C: ExtensionClient<ManageExtension>> ManageClient for C {}
