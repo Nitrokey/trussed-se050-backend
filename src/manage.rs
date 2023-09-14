@@ -13,9 +13,11 @@ use trussed::{
     serde_extensions::{Extension, ExtensionClient, ExtensionImpl, ExtensionResult},
     service::ServiceResources,
     store::Store,
-    types::CoreContext,
+    types::{Bytes, CoreContext},
     Error,
 };
+
+mod se050_tests;
 
 use crate::Se050Backend;
 
@@ -28,9 +30,14 @@ pub struct ManageExtension;
 #[derive(Debug, Deserialize, Serialize, Copy, Clone)]
 pub struct FactoryResetRequest;
 
+/// Test the  SE050
+#[derive(Debug, Deserialize, Serialize, Copy, Clone)]
+pub struct TestSe050Request;
+
 #[derive(Debug, Deserialize, Serialize)]
 pub enum ManageRequest {
     FactoryReset(FactoryResetRequest),
+    TestSe050(TestSe050Request),
 }
 
 impl TryFrom<ManageRequest> for FactoryResetRequest {
@@ -38,7 +45,7 @@ impl TryFrom<ManageRequest> for FactoryResetRequest {
     fn try_from(request: ManageRequest) -> Result<Self, Self::Error> {
         match request {
             ManageRequest::FactoryReset(request) => Ok(request),
-            // _ => Err(Error::InternalError),
+            _ => Err(Error::InternalError),
         }
     }
 }
@@ -49,12 +56,34 @@ impl From<FactoryResetRequest> for ManageRequest {
     }
 }
 
+impl TryFrom<ManageRequest> for TestSe050Request {
+    type Error = Error;
+    fn try_from(request: ManageRequest) -> Result<Self, Self::Error> {
+        match request {
+            ManageRequest::TestSe050(request) => Ok(request),
+            _ => Err(Error::InternalError),
+        }
+    }
+}
+
+impl From<TestSe050Request> for ManageRequest {
+    fn from(request: TestSe050Request) -> Self {
+        Self::TestSe050(request)
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Copy, Clone)]
 pub struct FactoryResetReply;
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct TestSe050Reply {
+    pub reply: Bytes<1024>,
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum ManageReply {
     FactoryReset(FactoryResetReply),
+    TestSe050(TestSe050Reply),
 }
 
 impl TryFrom<ManageReply> for FactoryResetReply {
@@ -62,7 +91,7 @@ impl TryFrom<ManageReply> for FactoryResetReply {
     fn try_from(request: ManageReply) -> Result<Self, Self::Error> {
         match request {
             ManageReply::FactoryReset(request) => Ok(request),
-            // _ => Err(Error::InternalError),
+            _ => Err(Error::InternalError),
         }
     }
 }
@@ -70,6 +99,22 @@ impl TryFrom<ManageReply> for FactoryResetReply {
 impl From<FactoryResetReply> for ManageReply {
     fn from(request: FactoryResetReply) -> Self {
         Self::FactoryReset(request)
+    }
+}
+
+impl TryFrom<ManageReply> for TestSe050Reply {
+    type Error = Error;
+    fn try_from(request: ManageReply) -> Result<Self, Self::Error> {
+        match request {
+            ManageReply::TestSe050(request) => Ok(request),
+            _ => Err(Error::InternalError),
+        }
+    }
+}
+
+impl From<TestSe050Reply> for ManageReply {
+    fn from(request: TestSe050Reply) -> Self {
+        Self::TestSe050(request)
     }
 }
 
@@ -159,6 +204,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                 })?;
                 Ok(FactoryResetReply.into())
             }
+            ManageRequest::TestSe050(TestSe050Request) => {
+                let mut reply = Bytes::new();
+                se050_tests::run_tests(&mut self.se, &mut reply)?;
+                Ok(TestSe050Reply { reply }.into())
+            }
         }
     }
 }
@@ -172,6 +222,12 @@ pub trait ManageClient: ExtensionClient<ManageExtension> {
     fn factory_reset(&mut self) -> ManageResult<'_, FactoryResetReply, Self> {
         self.extension(FactoryResetRequest)
     }
-}
 
-impl<C: ExtensionClient<ManageExtension>> ManageClient for C {}
+    /// Test the se050 device and driver
+    ///
+    /// This will factory reset the SE050, and test that most commands work as expected,
+    /// ensuring that the device is functioning properly and that the driver is stable.
+    fn test_se050(&mut self) -> ManageResult<'_, TestSe050Reply, Self> {
+        self.extension(TestSe050Request)
+    }
+}
