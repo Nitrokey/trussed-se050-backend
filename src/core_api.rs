@@ -656,8 +656,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         object_id: VolatileRsaObjectId,
         ciphertext: &[u8],
         se050_keystore: &mut impl Keystore,
-        core_keystore: &mut impl Keystore,
-        ns: NamespaceValue,
         algo: RsaEncryptionAlgo,
         kind: Kind,
         rng: &mut R,
@@ -717,9 +715,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         &mut self,
         id: PersistentObjectId,
         ciphertext: &[u8],
-        se050_keystore: &mut impl Keystore,
-        core_keystore: &mut impl Keystore,
-        ns: NamespaceValue,
         algo: RsaEncryptionAlgo,
     ) -> Result<reply::Decrypt, Error> {
         let buf = &mut [0; BUFFER_LEN];
@@ -748,7 +743,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         &mut self,
         req: &request::Decrypt,
         se050_keystore: &mut impl Keystore,
-        core_keystore: &mut impl Keystore,
         ns: NamespaceValue,
         rng: &mut R,
     ) -> Result<reply::Decrypt, Error> {
@@ -768,14 +762,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             return Err(Error::MechanismInvalid);
         }
 
-        let algo = match req.mechanism {
-            Mechanism::Rsa2048Raw | Mechanism::Rsa3072Raw | Mechanism::Rsa4096Raw => {
-                RsaEncryptionAlgo::NoPad
-            }
-            Mechanism::Rsa2048Pkcs1v15
-            | Mechanism::Rsa3072Pkcs1v15
-            | Mechanism::Rsa4096Pkcs1v15 => RsaEncryptionAlgo::Pkcs1,
-            _ => return Err(Error::MechanismParamInvalid),
+        let algo = match raw {
+            true => RsaEncryptionAlgo::NoPad,
+            false => RsaEncryptionAlgo::Pkcs1,
         };
 
         match key_id {
@@ -784,20 +773,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 key,
                 &req.message,
                 se050_keystore,
-                core_keystore,
-                ns,
                 algo,
                 kind,
                 rng,
             ),
-            ParsedObjectId::PersistentKey(key) => self.rsa_decrypt_persistent(
-                key,
-                &req.message,
-                se050_keystore,
-                core_keystore,
-                ns,
-                algo,
-            ),
+            ParsedObjectId::PersistentKey(key) => {
+                self.rsa_decrypt_persistent(key, &req.message, algo)
+            }
             _ => return Err(Error::ObjectHandleInvalid),
         }
     }
@@ -888,7 +870,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
             Request::Agree(req) if supported(req.mechanism) => {
                 self.agree(req, se050_keystore, core_keystore, ns)?.into()
             }
-            Request::Decrypt(req) if supported(req.mechanism) => todo!(),
+            Request::Decrypt(req) if supported(req.mechanism) => {
+                self.decrypt(req, se050_keystore, ns, rng)?.into()
+            }
             Request::DeriveKey(req) if supported(req.mechanism) => todo!(),
             Request::DeserializeKey(req) if supported(req.mechanism) => todo!(),
             Request::Encrypt(req) if supported(req.mechanism) => todo!(),
