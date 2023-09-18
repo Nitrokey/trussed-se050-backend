@@ -1,6 +1,6 @@
 //! Implementations of the core APIs for the SE050 backend
 
-use cbor_smol::cbor_serialize;
+use cbor_smol::{cbor_deserialize, cbor_serialize};
 use embedded_hal::blocking::delay::DelayUs;
 use hex_literal::hex;
 use littlefs2::path::PathBuf;
@@ -650,17 +650,67 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         })
     }
 
-    fn rsa_decrypt_volatile(
+    fn rsa_decrypt_volatile<R: CryptoRng + RngCore>(
         &mut self,
         key_id: KeyId,
         object_id: VolatileRsaObjectId,
-        data: &[u8],
+        ciphertext: &[u8],
         se050_keystore: &mut impl Keystore,
         core_keystore: &mut impl Keystore,
         ns: NamespaceValue,
         algo: RsaEncryptionAlgo,
+        kind: Kind,
+        rng: &mut R,
     ) -> Result<reply::Decrypt, Error> {
-        todo!()
+        let buf = &mut [0; BUFFER_LEN];
+        let data = se050_keystore.load_key(Secrecy::Secret, Some(kind), &key_id)?;
+        let data: VolatileRsaKey = cbor_deserialize(&data.material).or(Err(Error::CborError))?;
+        let session_id = self
+            .se
+            .run_command(
+                &CreateSession {
+                    object_id: object_id.intermediary_key_id(),
+                },
+                buf,
+            )
+            .map_err(|_err| {
+                debug!("Failed to create session");
+                Error::FunctionFailed
+            })?
+            .session_id;
+        self.se
+            .authenticate_aes128_session(session_id, &data.intermediary_key, rng)
+            .map_err(|_err| {
+                debug!("Failed to authenticate session");
+                Error::FunctionFailed
+            })?;
+        let res = self
+            .se
+            .run_session_command(
+                session_id,
+                &RsaDecrypt {
+                    key_id: object_id.key_id(),
+                    algo,
+                    ciphertext,
+                },
+                buf,
+            )
+            .map_err(|_err| {
+                error!("Failed to decrypt {_err:?}");
+                Error::FunctionFailed
+            })?;
+        self.se
+            .run_session_command(session_id, &CloseSession {}, &mut [0; 128])
+            .map_err(|_err| {
+                error!("Failed to decrypt {_err:?}");
+                Error::FunctionFailed
+            })?;
+
+        return Ok(reply::Decrypt {
+            plaintext: Some(
+                Bytes::from_slice(res.plaintext).map_err(|_err| Error::FunctionFailed)?,
+            ),
+        });
     }
 
     fn rsa_decrypt_persistent(
@@ -694,12 +744,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         });
     }
 
-    fn decrypt(
+    fn decrypt<R: CryptoRng + RngCore>(
         &mut self,
         req: &request::Decrypt,
         se050_keystore: &mut impl Keystore,
         core_keystore: &mut impl Keystore,
         ns: NamespaceValue,
+        rng: &mut R,
     ) -> Result<reply::Decrypt, Error> {
         let (_bits, kind, raw) = bits_and_kind_from_mechanism(req.mechanism)?;
         let (key_id, key_type, privacy) =
@@ -736,6 +787,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 core_keystore,
                 ns,
                 algo,
+                kind,
+                rng,
             ),
             ParsedObjectId::PersistentKey(key) => self.rsa_decrypt_persistent(
                 key,
