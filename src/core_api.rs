@@ -9,11 +9,11 @@ use se05x::{
     se05x::{
         commands::{
             CheckObjectExists, CloseSession, CreateSession, DeleteSecureObject,
-            EcdhGenerateSharedSecret, ExportObject, GetRandom, ImportObject, VerifySessionUserId,
-            WriteEcKey, WriteRsaKey, WriteSymmKey, WriteUserId,
+            EcdhGenerateSharedSecret, ExportObject, GetRandom, ImportObject, RsaDecrypt,
+            VerifySessionUserId, WriteEcKey, WriteRsaKey, WriteSymmKey, WriteUserId,
         },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
-        EcCurve, ObjectId, P1KeyType, Se05XResult, SymmKeyType,
+        EcCurve, ObjectId, P1KeyType, RsaEncryptionAlgo, Se05XResult, SymmKeyType,
     },
     t1::I2CForT1,
 };
@@ -65,6 +65,19 @@ struct VolatileRsaKey {
     key_id: VolatileRsaObjectId,
     #[serde(with = "serde_byte_array")]
     intermediary_key: [u8; 16],
+}
+
+/// The bool returned points at wether the mechanism is raw RSA
+fn bits_and_kind_from_mechanism(mechanism: Mechanism) -> Result<(usize, key::Kind, bool), Error> {
+    match mechanism {
+        Mechanism::Rsa2048Pkcs1v15 => Ok((2048, key::Kind::Rsa2048, false)),
+        Mechanism::Rsa3072Pkcs1v15 => Ok((3072, key::Kind::Rsa3072, false)),
+        Mechanism::Rsa4096Pkcs1v15 => Ok((4096, key::Kind::Rsa4096, false)),
+        Mechanism::Rsa2048Raw => Ok((2048, key::Kind::Rsa2048, true)),
+        Mechanism::Rsa3072Raw => Ok((3072, key::Kind::Rsa3072, true)),
+        Mechanism::Rsa4096Raw => Ok((4096, key::Kind::Rsa4096, true)),
+        _ => Err(Error::RequestNotAvailable),
+    }
 }
 
 impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
@@ -635,6 +648,105 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(reply::Agree {
             shared_secret: key_id,
         })
+    }
+
+    fn rsa_decrypt_volatile(
+        &mut self,
+        key_id: KeyId,
+        object_id: VolatileRsaObjectId,
+        data: &[u8],
+        se050_keystore: &mut impl Keystore,
+        core_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+        algo: RsaEncryptionAlgo,
+    ) -> Result<reply::Decrypt, Error> {
+        todo!()
+    }
+
+    fn rsa_decrypt_persistent(
+        &mut self,
+        id: PersistentObjectId,
+        ciphertext: &[u8],
+        se050_keystore: &mut impl Keystore,
+        core_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+        algo: RsaEncryptionAlgo,
+    ) -> Result<reply::Decrypt, Error> {
+        let buf = &mut [0; BUFFER_LEN];
+        let res = self
+            .se
+            .run_command(
+                &RsaDecrypt {
+                    key_id: id.0,
+                    algo,
+                    ciphertext,
+                },
+                buf,
+            )
+            .map_err(|_err| {
+                error!("Failed to decrypt {_err:?}");
+                Error::FunctionFailed
+            })?;
+        return Ok(reply::Decrypt {
+            plaintext: Some(
+                Bytes::from_slice(res.plaintext).map_err(|_err| Error::FunctionFailed)?,
+            ),
+        });
+    }
+
+    fn decrypt(
+        &mut self,
+        req: &request::Decrypt,
+        se050_keystore: &mut impl Keystore,
+        core_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<reply::Decrypt, Error> {
+        let (_bits, kind, raw) = bits_and_kind_from_mechanism(req.mechanism)?;
+        let (key_id, key_type, privacy) =
+            parse_key_id(req.key, ns).ok_or(Error::ObjectHandleInvalid)?;
+        if privacy != Privacy::Secret {
+            return Err(Error::ObjectHandleInvalid);
+        }
+
+        if !matches!(
+            (key_type, kind),
+            (KeyType::Rsa2048, Kind::Rsa2048)
+                | (KeyType::Rsa3072, Kind::Rsa3072)
+                | (KeyType::Rsa4096, Kind::Rsa4096)
+        ) {
+            return Err(Error::MechanismInvalid);
+        }
+
+        let algo = match req.mechanism {
+            Mechanism::Rsa2048Raw | Mechanism::Rsa3072Raw | Mechanism::Rsa4096Raw => {
+                RsaEncryptionAlgo::NoPad
+            }
+            Mechanism::Rsa2048Pkcs1v15
+            | Mechanism::Rsa3072Pkcs1v15
+            | Mechanism::Rsa4096Pkcs1v15 => RsaEncryptionAlgo::Pkcs1,
+            _ => return Err(Error::MechanismParamInvalid),
+        };
+
+        match key_id {
+            ParsedObjectId::VolatileRsaKey(key) => self.rsa_decrypt_volatile(
+                req.key,
+                key,
+                &req.message,
+                se050_keystore,
+                core_keystore,
+                ns,
+                algo,
+            ),
+            ParsedObjectId::PersistentKey(key) => self.rsa_decrypt_persistent(
+                key,
+                &req.message,
+                se050_keystore,
+                core_keystore,
+                ns,
+                algo,
+            ),
+            _ => return Err(Error::ObjectHandleInvalid),
+        }
     }
 }
 
