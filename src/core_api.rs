@@ -24,7 +24,7 @@ use trussed::{
     config::MAX_MESSAGE_LENGTH,
     key::{self, Kind, Secrecy},
     service::Keystore,
-    types::{KeyId, Location, Mechanism, Message},
+    types::{KeyId, Location, Mechanism, Message, Vec},
     Bytes, Error,
 };
 
@@ -280,6 +280,23 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(reply::Delete {
             success: keystore.delete_key(&key),
         })
+    }
+
+    fn derive_key<R: CryptoRng + RngCore>(
+        &mut self,
+        req: &request::DeriveKey,
+        keystore: &mut impl Keystore,
+        rng: &mut R,
+        ns: NamespaceValue,
+    ) -> Result<reply::DeriveKey, Error> {
+        if req.additional_data.is_some() {
+            return Err(Error::MechanismParamInvalid);
+        }
+        let (parsed_key, parsed_ty, parsed_priv) = parse_key_id(req.base_key, ns).unwrap();
+        if parsed_priv != Privacy::Secret {
+            return Err(Error::MechanismParamInvalid);
+        }
+        todo!()
     }
 
     fn generate_key<R: CryptoRng + RngCore>(
