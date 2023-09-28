@@ -25,11 +25,11 @@ cbor-smol = "0.4.0"
 serde_bytes = { version = "0.11.12", default-features = false }
 
 [patch.crates-io]
-se05x = { git = "https://github.com/Nitrokey/se05x.git", rev = "0b77eb6b152d214897696aadf87767fd84ffcb0e"} 
+se05x = { git = "https://github.com/Nitrokey/se05x.git", rev = "2625b3387557a02d12948f2f44e980e37f1f9cca"} 
 trussed = { git = "https://github.com/Nitrokey/trussed", rev = "6b9a43fbaaf34fe8d69fac0021f8130dd9a436c9" }
 trussed-auth = { git = "https://github.com/Nitrokey/trussed-auth", rev = "49c13eae6d9a225676191d4776d514848e4eab5b" }
 trussed-staging = { git = "https://github.com/Nitrokey/trussed-staging.git", rev = "83e33925f1edcc1f20ae9cc4a44fffe487c9fa69" }
-iso7816 = { git = "https://github.com/sosthene-nitrokey/iso7816.git", rev = "160ca3bbd8e21ec4e4ee1e0748e1eaa53a45c97f"}
+iso7816 = { git = "https://github.com/sosthene-nitrokey/iso7816.git", rev = "82189c9ea9c4420e1e1fcdce362b710c9c7b19c5"}
 
 [features]
 

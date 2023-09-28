@@ -15,8 +15,8 @@ use se05x::{
     se05x::{
         commands::{
             CheckObjectExists, CloseSession, CreateSession, DeleteSecureObject, GetRandom,
-            ReadAttestObject, ReadAttributesAttest, ReadObject, VerifySessionUserId, WriteBinary,
-            WriteSymmKey, WriteUserId,
+            ReadAttestObject, ReadObject, VerifySessionUserId, WriteBinary, WriteSymmKey,
+            WriteUserId,
         },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
         AttestationAlgo, ObjectId, Se05X, Se05XResult, SymmKeyType,
@@ -557,7 +557,7 @@ impl PinData {
         se050: &mut Se05X<Twi, D>,
         rng: &mut R,
     ) -> Result<(u16, u16), Error> {
-        let buf = &mut [0u8; 128];
+        let buf = &mut [0u8; 1024];
         let attrs = se050
             .run_command(
                 &ReadAttestObject::builder()
@@ -569,7 +569,7 @@ impl PinData {
                 buf,
             )
             .map_err(|err| {
-                debug_now!("Got err: {err:?}");
+                debug_now!("Got err reading attempts: {err:?}");
                 err
             })?
             .attributes;

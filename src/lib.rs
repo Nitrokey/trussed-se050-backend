@@ -5,13 +5,9 @@ use core::ops::Range;
 use embedded_hal::blocking::delay::DelayUs;
 use hex_literal::hex;
 use littlefs2::path::Path;
-use namespacing::{namespace, Namespace, NamespaceValue, ObjectKind};
+use namespacing::{Namespace, NamespaceValue};
 use se05x::{
-    se05x::{
-        commands::{CheckObjectExists, ReadEcCurveList, WriteEcKey},
-        policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
-        EcCurve, ObjectId, P1KeyType, Se05X, Se05XResult,
-    },
+    se05x::{commands::ReadEcCurveList, EcCurve, ObjectId, Se05X},
     t1::I2CForT1,
 };
 use trussed::{types::Location, Bytes};
