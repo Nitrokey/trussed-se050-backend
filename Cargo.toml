@@ -32,6 +32,7 @@ trussed-staging = { git = "https://github.com/Nitrokey/trussed-staging.git", rev
 iso7816 = { git = "https://github.com/sosthene-nitrokey/iso7816.git", rev = "82189c9ea9c4420e1e1fcdce362b710c9c7b19c5"}
 
 [features]
+default = ["log-all"]
 
 log-all = []
 log-none = []

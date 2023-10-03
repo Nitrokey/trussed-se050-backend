@@ -110,7 +110,14 @@ enum_number! {
         /// The AES authentication object that protects the Volatile RSA key of same id.
         VolatileRsaIntermediary = 0x7,
         /// Salt value  stored on the SE050
-        AttestKey = 0xE,
+        /// A persistent key
+        PublicPersistentKey = 0x8,
+        /// A volatile key. The private key data is cleared unless the key is currently in use
+        PublicVolatileKey = 0x9,
+        /// A "volatile" RSA key. Since RSA keys are too large to fit in the SE050 volatile memory, they are auctally stored in persistent storage, and protected by a AES authentication object
+        PublicVolatileRsaKey = 0xA,
+        /// The AES authentication object that protects the Volatile RSA key of same id.
+        PublicVolatileRsaIntermediary = 0xB,
         /// Salt value  stored on the SE050
         SaltValue = 0xF,
     }
@@ -259,7 +266,9 @@ impl PinObjectIdWithDerived {
 wrapper!(PersistentObjectId, ObjectKind::PersistentKey);
 wrapper!(VolatileObjectId, ObjectKind::VolatileKey);
 wrapper!(VolatileRsaObjectId, ObjectKind::VolatileRsaKey);
-wrapper!(AttestKeyObjectId, ObjectKind::AttestKey);
+wrapper!(PublicPersistentObjectId, ObjectKind::PublicPersistentKey);
+wrapper!(PublicVolatileObjectId, ObjectKind::PublicVolatileKey);
+wrapper!(PublicVolatileRsaObjectId, ObjectKind::PublicVolatileRsaKey);
 
 impl VolatileRsaObjectId {
     pub(crate) fn key_id(&self) -> ObjectId {
@@ -277,6 +286,22 @@ impl VolatileRsaObjectId {
     }
 }
 
+impl PublicVolatileRsaObjectId {
+    pub(crate) fn key_id(&self) -> ObjectId {
+        self.0
+    }
+
+    pub(crate) fn intermediary_key_id(&self) -> ObjectId {
+        let mut base = self.0 .0;
+        base[3] += 1;
+        assert_eq!(
+            parse_namespace(base[3]).unwrap().1,
+            ObjectKind::PublicVolatileRsaIntermediary
+        );
+        ObjectId(base)
+    }
+}
+
 wrapper!(SaltValueObjectId, ObjectKind::VolatileRsaKey);
 
 enum_from!(
@@ -287,8 +312,10 @@ enum_from!(
         PersistentKey(PersistentObjectId),
         VolatileKey(VolatileObjectId),
         VolatileRsaKey(VolatileRsaObjectId),
+        PublicPersistentKey(PublicPersistentObjectId),
+        PublicVolatileKey(PublicVolatileObjectId),
+        PublicVolatileRsaKey(PublicVolatileRsaObjectId),
         SaltValue(SaltValueObjectId),
-        AttestKey(AttestKeyObjectId),
     }
 );
 
@@ -306,8 +333,12 @@ impl ParsedObjectId {
             ObjectKind::VolatileRsaKey | ObjectKind::VolatileRsaIntermediary => {
                 VolatileRsaObjectId::from_value(id).into()
             }
-            ObjectKind::AttestKey => AttestKeyObjectId::from_value(id).into(),
             ObjectKind::SaltValue => SaltValueObjectId::from_value(id).into(),
+            ObjectKind::PublicPersistentKey => PublicPersistentObjectId::from_value(id).into(),
+            ObjectKind::PublicVolatileKey => PublicVolatileObjectId::from_value(id).into(),
+            ObjectKind::PublicVolatileRsaKey | ObjectKind::PublicVolatileRsaIntermediary => {
+                PublicVolatileRsaObjectId::from_value(id).into()
+            }
         };
         Some((ns, parsed))
     }
@@ -318,7 +349,7 @@ impl ParsedObjectId {
 //
 // Key IDs that belong to the SE050 backend start with 64 bits of 0xCAFE42424242CAFE to be able to recognize them.
 // The next 16 bits are for metadata for the key type
-// The next 16 bits are for the privacy of the key public/private
+// The next 16 bits are RFU
 // The next 32 bits are the ObjectId itself
 //
 // Considerations
@@ -349,32 +380,24 @@ enum_number! {
     }
 }
 
-const PRIVACY_OFFSET: u32 = 32;
-const TY_OFFSET: u32 = PRIVACY_OFFSET + 16;
+const TY_OFFSET: u32 = 32;
 
-pub(crate) fn key_id_for_obj(obj: ObjectId, privacy: Privacy, ty: KeyType) -> KeyId {
+pub(crate) fn key_id_for_obj(obj: ObjectId, ty: KeyType) -> KeyId {
     let mut base = 0xCAFE42424242CAFE0000000000000000;
     let obj = u32::from_be_bytes(obj.0);
     base |= obj as u128;
-    base |= (privacy as u16 as u128) << PRIVACY_OFFSET;
     base |= (ty as u16 as u128) << TY_OFFSET;
 
     KeyId::from_value(base)
 }
 
-pub(crate) fn parse_key_id(
-    id: KeyId,
-    ns: NamespaceValue,
-) -> Option<(ParsedObjectId, KeyType, Privacy)> {
+pub(crate) fn parse_key_id(id: KeyId, ns: NamespaceValue) -> Option<(ParsedObjectId, KeyType)> {
     let val = id.value();
     if val & 0xFFFFFFFFFFFFFFFF0000000000000000 != 0xCAFE42424242CAFE0000000000000000 {
         return None;
     }
 
     let ty = (((val & 0xFFFF << TY_OFFSET) >> TY_OFFSET) as u16)
-        .try_into()
-        .ok()?;
-    let privacy = (((val & 0xFFFF << PRIVACY_OFFSET) >> PRIVACY_OFFSET) as u16)
         .try_into()
         .ok()?;
 
@@ -388,7 +411,7 @@ pub(crate) fn parse_key_id(
     if parsed_ns != ns {
         return None;
     }
-    Some((parsed_id, ty, privacy))
+    Some((parsed_id, ty))
 }
 
 #[cfg(test)]
@@ -400,18 +423,15 @@ mod tests2 {
         assert!(ID_RANGE.contains(&u32::from_be_bytes(obj_id.0 .0)));
         assert_eq!(
             KeyId::from_value(0xCAFE42424242CAFE000400010ABBCCD2u128),
-            key_id_for_obj(*obj_id, Privacy::Public, KeyType::Rsa2048)
+            key_id_for_obj(*obj_id, KeyType::Rsa2048)
         );
 
         let ns = 0xD.try_into().unwrap();
         for ty in KeyType::all() {
-            for p in Privacy::all() {
-                let key_id = key_id_for_obj(*obj_id, *p, *ty);
-                let (parsed_key, parsed_ty, parsed_priv) = parse_key_id(key_id, ns).unwrap();
-                assert_eq!(parsed_key, ParsedObjectId::PinWithDerived(obj_id));
-                assert_eq!(parsed_ty, *ty);
-                assert_eq!(parsed_priv, *p)
-            }
+            let key_id = key_id_for_obj(*obj_id, *ty);
+            let (parsed_key, parsed_ty) = parse_key_id(key_id, ns).unwrap();
+            assert_eq!(parsed_key, ParsedObjectId::PinWithDerived(obj_id));
+            assert_eq!(parsed_ty, *ty);
         }
     }
 }

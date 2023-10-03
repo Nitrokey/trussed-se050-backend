@@ -9,8 +9,8 @@ use se05x::{
     se05x::{
         commands::{
             CheckObjectExists, CloseSession, CreateSession, DeleteSecureObject,
-            EcdhGenerateSharedSecret, ExportObject, GetRandom, ImportObject, RsaDecrypt,
-            VerifySessionUserId, WriteEcKey, WriteRsaKey, WriteSymmKey, WriteUserId,
+            EcdhGenerateSharedSecret, ExportObject, GetRandom, ImportObject, ReadObject,
+            RsaDecrypt, VerifySessionUserId, WriteEcKey, WriteRsaKey, WriteSymmKey, WriteUserId,
         },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
         EcCurve, ObjectId, P1KeyType, RsaEncryptionAlgo, Se05XResult, SymmKeyType,
@@ -31,7 +31,8 @@ use trussed::{
 use crate::{
     namespacing::{
         key_id_for_obj, parse_key_id, KeyType, NamespaceValue, ParsedObjectId, PersistentObjectId,
-        Privacy, VolatileObjectId, VolatileRsaObjectId,
+        Privacy, PublicPersistentObjectId, PublicVolatileObjectId, VolatileObjectId,
+        VolatileRsaObjectId,
     },
     Context, Se050Backend, BACKEND_DIR,
 };
@@ -115,33 +116,26 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         ns: NamespaceValue,
         keystore: &mut impl Keystore,
     ) -> Result<reply::Delete, Error> {
-        let (parsed_key, _parsed_ty, parsed_priv) = parse_key_id(*key, ns).unwrap();
-        match (parsed_key, parsed_priv) {
-            (
-                ParsedObjectId::Pin(_)
-                | ParsedObjectId::PinWithDerived(_)
-                | ParsedObjectId::AttestKey(_)
-                | ParsedObjectId::SaltValue(_),
-                _,
-            ) => return Err(Error::ObjectHandleInvalid),
-            (ParsedObjectId::PersistentKey(PersistentObjectId(obj)), _) => {
+        let (parsed_key, _parsed_ty) = parse_key_id(*key, ns).ok_or_else(|| {
+            debug_now!("Failed to parse key id");
+            Error::RequestNotAvailable
+        })?;
+        match parsed_key {
+            ParsedObjectId::Pin(_)
+            | ParsedObjectId::PinWithDerived(_)
+            | ParsedObjectId::SaltValue(_) => return Err(Error::ObjectHandleInvalid),
+            ParsedObjectId::PersistentKey(PersistentObjectId(obj))
+            | ParsedObjectId::PublicPersistentKey(PublicPersistentObjectId(obj)) => {
                 self.delete_persistent_key(obj)
             }
-            (ParsedObjectId::VolatileKey(VolatileObjectId(obj)), Privacy::Secret) => {
+            ParsedObjectId::VolatileKey(VolatileObjectId(obj))
+            | ParsedObjectId::PublicVolatileKey(PublicVolatileObjectId(obj)) => {
                 self.delete_volatile_key(&key, obj, keystore)
             }
-            (ParsedObjectId::VolatileKey(VolatileObjectId(_obj)), Privacy::Public) => {
-                // TODO Check that public key material stays for transient keys
-                // If not, we will need to read the public keys and store them when deriving
-                Ok(reply::Delete { success: true })
-            }
-            (ParsedObjectId::VolatileRsaKey(obj), Privacy::Secret) => {
+            ParsedObjectId::VolatileRsaKey(obj) => {
                 self.delete_volatile_rsa_key(*key, obj, keystore)
             }
-            (ParsedObjectId::VolatileRsaKey(_obj), Privacy::Public) => {
-                // Nothing to do since the public RSA key is actually the same object ID as the private key
-                Ok(reply::Delete { success: true })
-            }
+            ParsedObjectId::PublicVolatileRsaKey(_obj) => todo!(),
         }
     }
 
@@ -285,17 +279,223 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     fn derive_key<R: CryptoRng + RngCore>(
         &mut self,
         req: &request::DeriveKey,
-        keystore: &mut impl Keystore,
+        core_keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
         rng: &mut R,
         ns: NamespaceValue,
     ) -> Result<reply::DeriveKey, Error> {
         if req.additional_data.is_some() {
             return Err(Error::MechanismParamInvalid);
         }
-        let (parsed_key, parsed_ty, parsed_priv) = parse_key_id(req.base_key, ns).unwrap();
-        if parsed_priv != Privacy::Secret {
-            return Err(Error::MechanismParamInvalid);
+        let (parsed_key, parsed_ty) =
+            parse_key_id(req.base_key, ns).ok_or(Error::RequestNotAvailable)?;
+        match parsed_key {
+            ParsedObjectId::Pin(_)
+            | ParsedObjectId::PinWithDerived(_)
+            | ParsedObjectId::SaltValue(_) => return Err(Error::MechanismParamInvalid),
+            ParsedObjectId::PersistentKey(k) => {
+                self.derive_raw_key(req, k.0, parsed_ty, core_keystore, rng, ns)
+            }
+            ParsedObjectId::VolatileKey(k) => {
+                self.derive_raw_key(req, k.0, parsed_ty, core_keystore, rng, ns)
+            }
+            ParsedObjectId::VolatileRsaKey(k) => {
+                self.derive_volatile_rsa_key(req, k, parsed_ty, core_keystore, se050_keystore, ns)
+            }
+            ParsedObjectId::PublicPersistentKey(_)
+            | ParsedObjectId::PublicVolatileKey(_)
+            | ParsedObjectId::PublicVolatileRsaKey(_) => {
+                return Err(trussed::Error::MechanismParamInvalid)
+            }
         }
+    }
+
+    fn derive_raw_key<R: CryptoRng + RngCore>(
+        &mut self,
+        req: &request::DeriveKey,
+        key: ObjectId,
+        ty: KeyType,
+        core_keystore: &mut impl Keystore,
+        rng: &mut R,
+        ns: NamespaceValue,
+    ) -> Result<reply::DeriveKey, Error> {
+        let buf = &mut [0; 1024];
+        let is_transient = req.attributes.persistence == Location::Volatile;
+        match ty {
+            KeyType::Ed255 => {
+                let material = self
+                    .se
+                    .run_command(&ReadObject::builder().object_id(key).build(), buf)
+                    .map_err(|_err| {
+                        error_now!("Failed to derive key: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+                match is_transient {
+                    true => {
+                        let obj = PublicVolatileObjectId::new(rng, ns);
+                        self.se
+                            .run_command(
+                                &WriteEcKey::builder()
+                                    .transient(true)
+                                    .key_type(P1KeyType::Public)
+                                    .object_id(obj.0)
+                                    .curve(EcCurve::IdEccEd25519)
+                                    .public_key(material.data)
+                                    .build(),
+                                &mut [0; 128],
+                            )
+                            .map_err(|_err| {
+                                error_now!("Failed to derive key: {_err:?}");
+                                Error::FunctionFailed
+                            })?;
+                        return Ok(reply::DeriveKey {
+                            key: key_id_for_obj(obj.0, KeyType::Ed255),
+                        });
+                    }
+                    false => {
+                        let obj = PublicPersistentObjectId::new(rng, ns);
+                        self.se
+                            .run_command(
+                                &WriteEcKey::builder()
+                                    .key_type(P1KeyType::Public)
+                                    .object_id(obj.0)
+                                    .curve(EcCurve::IdEccEd25519)
+                                    .public_key(material.data)
+                                    .build(),
+                                &mut [0; 128],
+                            )
+                            .map_err(|_err| {
+                                error_now!("Failed to derive key: {_err:?}");
+                                Error::FunctionFailed
+                            })?;
+                        return Ok(reply::DeriveKey {
+                            key: key_id_for_obj(obj.0, KeyType::Ed255),
+                        });
+                    }
+                }
+            }
+            KeyType::X255 => {
+                let material = self
+                    .se
+                    .run_command(&ReadObject::builder().object_id(key).build(), buf)
+                    .map_err(|_err| {
+                        error_now!("Failed to derive key: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+                debug_now!("Material: {material:02x?}");
+                debug_now!("Len: {}", material.data.len());
+                match is_transient {
+                    true => {
+                        let obj = PublicVolatileObjectId::new(rng, ns);
+                        self.se
+                            .run_command(
+                                &WriteEcKey::builder()
+                                    .transient(true)
+                                    .key_type(P1KeyType::Public)
+                                    .object_id(obj.0)
+                                    .curve(EcCurve::IdEccMontDh25519)
+                                    .public_key(material.data)
+                                    .build(),
+                                &mut [0; 128],
+                            )
+                            .map_err(|_err| {
+                                error_now!("Failed to derive key: {_err:?}");
+                                Error::FunctionFailed
+                            })?;
+                        return Ok(reply::DeriveKey {
+                            key: key_id_for_obj(obj.0, KeyType::X255),
+                        });
+                    }
+                    false => {
+                        let obj = PublicPersistentObjectId::new(rng, ns);
+                        self.se
+                            .run_command(
+                                &WriteEcKey::builder()
+                                    .key_type(P1KeyType::Public)
+                                    .object_id(obj.0)
+                                    .curve(EcCurve::IdEccMontDh25519)
+                                    .public_key(material.data)
+                                    .build(),
+                                &mut [0; 128],
+                            )
+                            .map_err(|_err| {
+                                error_now!("Failed to derive key: {_err:?}");
+                                Error::FunctionFailed
+                            })?;
+                        return Ok(reply::DeriveKey {
+                            key: key_id_for_obj(obj.0, KeyType::X255),
+                        });
+                    }
+                }
+            }
+            KeyType::P256 => {
+                let material = self
+                    .se
+                    .run_command(&ReadObject::builder().object_id(key).build(), buf)
+                    .map_err(|_err| {
+                        error_now!("Failed to derive key: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+                debug_now!("Material: {material:02x?}");
+                debug_now!("Len: {}", material.data.len());
+
+                match is_transient {
+                    true => {
+                        let obj = PublicVolatileObjectId::new(rng, ns);
+                        self.se
+                            .run_command(
+                                &WriteEcKey::builder()
+                                    .transient(true)
+                                    .key_type(P1KeyType::Public)
+                                    .object_id(obj.0)
+                                    .curve(EcCurve::NistP256)
+                                    .public_key(material.data)
+                                    .build(),
+                                &mut [0; 128],
+                            )
+                            .map_err(|_err| {
+                                error_now!("Failed to derive key: {_err:?}");
+                                Error::FunctionFailed
+                            })?;
+                        return Ok(reply::DeriveKey {
+                            key: key_id_for_obj(obj.0, KeyType::P256),
+                        });
+                    }
+                    false => {
+                        let obj = PublicPersistentObjectId::new(rng, ns);
+                        self.se
+                            .run_command(
+                                &WriteEcKey::builder()
+                                    .key_type(P1KeyType::Public)
+                                    .object_id(obj.0)
+                                    .curve(EcCurve::NistP256)
+                                    .public_key(material.data)
+                                    .build(),
+                                &mut [0; 128],
+                            )
+                            .map_err(|_err| {
+                                error_now!("Failed to derive key: {_err:?}");
+                                Error::FunctionFailed
+                            })?;
+                        return Ok(reply::DeriveKey {
+                            key: key_id_for_obj(obj.0, KeyType::P256),
+                        });
+                    }
+                }
+            }
+            _ => todo!(),
+        }
+    }
+
+    fn derive_volatile_rsa_key(
+        &mut self,
+        req: &request::DeriveKey,
+        key: VolatileRsaObjectId,
+        ty: KeyType,
+        core_keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<reply::DeriveKey, Error> {
         todo!()
     }
 
@@ -428,16 +628,31 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Mechanism::Ed255 => self
                 .se
                 .run_command(&generate_ed255(object_id.0, true), buf)
-                .or(Err(Error::FunctionFailed))?,
+                .map_err(|_err| {
+                    error_now!("Failed to generate volatile key: {_err:?}");
+                    error_now!("Command: {:?}", generate_ed255(object_id.0, true));
+                    Error::FunctionFailed
+                })?,
             Mechanism::X255 => self
                 .se
-                .run_command(&generate_ed255(object_id.0, true), buf)
-                .or(Err(Error::FunctionFailed))?,
+                .run_command(&generate_x255(object_id.0, true), buf)
+                .map_err(|_err| {
+                    // error_now!("Failed to generate volatile key: {_err:?}");
+                    error_now!(
+                        "Failed to generate volatile key: {_err:?}\nCommand: {:?}",
+                        generate_x255(object_id.0, true)
+                    );
+                    Error::FunctionFailed
+                })?,
             // TODO First write curve somehow
             Mechanism::P256 => self
                 .se
-                .run_command(&generate_ed255(object_id.0, true), buf)
-                .or(Err(Error::FunctionFailed))?,
+                .run_command(&generate_p256(object_id.0, true), buf)
+                .map_err(|_err| {
+                    error_now!("Failed to generate volatile key: {_err:?}");
+                    error_now!("Command: {:?}", generate_p256(object_id.0, true));
+                    Error::FunctionFailed
+                })?,
             _ => unreachable!(),
         }
         let exported = self
@@ -445,7 +660,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             .run_command(&ExportObject::builder().object_id(object_id.0).build(), buf)
             .or(Err(Error::FunctionFailed))?
             .data;
-        let key = key_id_for_obj(object_id.0, Privacy::Secret, ty);
+        let key = key_id_for_obj(object_id.0, ty);
         let material: Bytes<1024> = trussed::cbor_serialize_bytes(&VolatileKeyMaterialRef {
             object_id,
             exported_material: exported,
@@ -471,31 +686,48 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Mechanism::Ed255 => self
                 .se
                 .run_command(&generate_ed255(object_id.0, false), buf)
-                .or(Err(Error::FunctionFailed))?,
-
+                .map_err(|_err| {
+                    error_now!("Failed to generate key: {_err:?}");
+                    Error::FunctionFailed
+                })?,
             Mechanism::X255 => self
                 .se
                 .run_command(&generate_x255(object_id.0, false), buf)
-                .or(Err(Error::FunctionFailed))?,
+                .map_err(|_err| {
+                    error_now!("Failed to generate key: {_err:?}");
+                    Error::FunctionFailed
+                })?,
 
             // TODO First write curve somehow
             Mechanism::P256 => self
                 .se
                 .run_command(&generate_p256(object_id.0, false), buf)
-                .or(Err(Error::FunctionFailed))?,
+                .map_err(|_err| {
+                    error_now!("Failed to generate key: {_err:?}");
+                    Error::FunctionFailed
+                })?,
             Mechanism::P256Prehashed => return Err(Error::MechanismParamInvalid),
             Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => self
                 .se
                 .run_command(&generate_rsa(object_id.0, 2048), buf)
-                .or(Err(Error::FunctionFailed))?,
+                .map_err(|_err| {
+                    error_now!("Failed to generate key: {_err:?}");
+                    Error::FunctionFailed
+                })?,
             Mechanism::Rsa3072Raw | Mechanism::Rsa3072Pkcs1v15 => self
                 .se
                 .run_command(&generate_rsa(object_id.0, 3072), buf)
-                .or(Err(Error::FunctionFailed))?,
+                .map_err(|_err| {
+                    error_now!("Failed to generate key: {_err:?}");
+                    Error::FunctionFailed
+                })?,
             Mechanism::Rsa4096Raw | Mechanism::Rsa4096Pkcs1v15 => self
                 .se
                 .run_command(&generate_rsa(object_id.0, 4096), buf)
-                .or(Err(Error::FunctionFailed))?,
+                .map_err(|_err| {
+                    error_now!("Failed to generate key: {_err:?}");
+                    Error::FunctionFailed
+                })?,
             // Other mechanisms are filtered through the `supported` function
             _ => unreachable!(),
         }
@@ -515,136 +747,68 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         };
 
         Ok(reply::GenerateKey {
-            key: key_id_for_obj(object_id.0, Privacy::Secret, ty),
+            key: key_id_for_obj(object_id.0, ty),
         })
     }
 
     fn agree(
         &mut self,
         req: &request::Agree,
-        se050_keystore: &mut impl Keystore,
         core_keystore: &mut impl Keystore,
         ns: NamespaceValue,
     ) -> Result<reply::Agree, Error> {
-        let (parsed_key, parsed_ty, parsed_priv) = parse_key_id(req.private_key, ns).unwrap();
-        if parsed_priv != Privacy::Secret {
-            return Err(Error::ObjectHandleInvalid);
+        let (priv_parsed_key, priv_parsed_ty) =
+            parse_key_id(req.private_key, ns).ok_or(Error::RequestNotAvailable)?;
+
+        let (pub_parsed_key, pub_parsed_ty) =
+            parse_key_id(req.public_key, ns).ok_or(Error::RequestNotAvailable)?;
+        if pub_parsed_ty != priv_parsed_ty {
+            return Err(trussed::Error::MechanismParamInvalid);
         }
 
-        match parsed_key {
-            ParsedObjectId::VolatileKey(obj) => {
-                self.agree_volatile(req, obj, parsed_ty, se050_keystore, core_keystore)
-            }
-            ParsedObjectId::PersistentKey(obj) => {
-                self.agree_persistent(req, obj, parsed_ty, core_keystore)
-            }
-            _ => Err(Error::ObjectHandleInvalid),
+        if !matches!(
+            (req.mechanism, priv_parsed_ty),
+            (Mechanism::P256, KeyType::P256) | (Mechanism::X255, KeyType::X255)
+        ) {
+            return Err(Error::MechanismParamInvalid);
         }
-    }
 
-    fn agree_persistent(
-        &mut self,
-        req: &request::Agree,
-        key: PersistentObjectId,
-        ty: KeyType,
-        core_keystore: &mut impl Keystore,
-    ) -> Result<reply::Agree, Error> {
-        let kind = match (req.mechanism, ty) {
-            (Mechanism::P256, KeyType::P256) => Kind::P256,
-            (Mechanism::X255, KeyType::X255) => Kind::X255,
-            _ => return Err(Error::MechanismParamInvalid),
+        let (ParsedObjectId::VolatileKey(VolatileObjectId(priv_obj))
+        | ParsedObjectId::PersistentKey(PersistentObjectId(priv_obj))) = priv_parsed_key
+        else {
+            return Err(Error::MechanismParamInvalid);
+        };
+        let (ParsedObjectId::PublicVolatileKey(PublicVolatileObjectId(pub_obj))
+        | ParsedObjectId::PublicPersistentKey(PublicPersistentObjectId(pub_obj))) = pub_parsed_key
+        else {
+            return Err(Error::MechanismParamInvalid);
         };
 
-        let pub_key = core_keystore.load_key(Secrecy::Public, Some(kind), &req.public_key)?;
+        let buf = &mut [0; 256];
 
-        let buf = &mut [0; 1024];
+        let pub_key = self
+            .se
+            .run_command(&ReadObject::builder().object_id(pub_obj).build(), buf)
+            .map_err(|_err| {
+                debug_now!("Failed to read public key: {_err:?}");
+                Error::FunctionFailed
+            })?;
 
+        let buf = &mut [0; 256];
         let shared_secret = self
             .se
             .run_command(
                 &EcdhGenerateSharedSecret {
-                    key_id: key.0,
-                    public_key: &pub_key.material,
+                    key_id: priv_obj,
+                    public_key: pub_key.data,
                 },
                 buf,
             )
-            .or(Err(Error::FunctionFailed))?
+            .map_err(|_err| {
+                debug_now!("Failed to perform agree: {_err:?}");
+                Error::FunctionFailed
+            })?
             .shared_secret;
-
-        let flags = if req.attributes.serializable {
-            key::Flags::SERIALIZABLE
-        } else {
-            key::Flags::empty()
-        };
-        let info = key::Info {
-            kind: key::Kind::Shared(shared_secret.len()),
-            flags,
-        };
-
-        let key_id = core_keystore.store_key(
-            req.attributes.persistence,
-            key::Secrecy::Secret,
-            info,
-            &shared_secret,
-        )?;
-        Ok(reply::Agree {
-            shared_secret: key_id,
-        })
-    }
-
-    fn agree_volatile(
-        &mut self,
-        req: &request::Agree,
-        obj_id: VolatileObjectId,
-        ty: KeyType,
-        se050_keystore: &mut impl Keystore,
-        core_keystore: &mut impl Keystore,
-    ) -> Result<reply::Agree, Error> {
-        let kind = match (req.mechanism, ty) {
-            (Mechanism::P256, KeyType::P256) => Kind::P256,
-            (Mechanism::X255, KeyType::X255) => Kind::X255,
-            _ => return Err(Error::MechanismParamInvalid),
-        };
-
-        let priv_key = se050_keystore.load_key(Secrecy::Secret, Some(kind), &req.private_key)?;
-        let priv_key: VolatileKeyMaterialRef =
-            cbor_smol::cbor_deserialize(&priv_key.material).or(Err(Error::CborError))?;
-        if priv_key.object_id != obj_id {
-            error!(
-                "Incorrect object id: {:02x?} {:02x?}",
-                priv_key.object_id, obj_id
-            );
-            return Err(Error::FunctionFailed);
-        }
-
-        let pub_key = core_keystore.load_key(Secrecy::Public, Some(kind), &req.public_key)?;
-
-        let buf = &mut [0; 1024];
-
-        self.se
-            .run_command(
-                &ImportObject::builder()
-                    .object_id(priv_key.object_id.0)
-                    .serialized_object(priv_key.exported_material)
-                    .build(),
-                buf,
-            )
-            .or(Err(Error::FunctionFailed))?;
-
-        let shared_secret = self
-            .se
-            .run_command(
-                &EcdhGenerateSharedSecret {
-                    key_id: *priv_key.object_id,
-                    public_key: &pub_key.material,
-                },
-                buf,
-            )
-            .or(Err(Error::FunctionFailed))?
-            .shared_secret;
-
-        // Clear volatile data
-        self.reselect()?;
 
         let flags = if req.attributes.serializable {
             key::Flags::SERIALIZABLE
@@ -699,7 +863,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 debug!("Failed to authenticate session");
                 Error::FunctionFailed
             })?;
-        let res = self
+        let plaintext = self
             .se
             .run_session_command(
                 session_id,
@@ -713,7 +877,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             .map_err(|_err| {
                 error!("Failed to decrypt {_err:?}");
                 Error::FunctionFailed
-            })?;
+            })?
+            .plaintext;
         self.se
             .run_session_command(session_id, &CloseSession {}, &mut [0; 128])
             .map_err(|_err| {
@@ -722,9 +887,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             })?;
 
         return Ok(reply::Decrypt {
-            plaintext: Some(
-                Bytes::from_slice(res.plaintext).map_err(|_err| Error::FunctionFailed)?,
-            ),
+            plaintext: Some(Bytes::from_slice(plaintext).map_err(|_err| Error::FunctionFailed)?),
         });
     }
 
@@ -764,11 +927,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         rng: &mut R,
     ) -> Result<reply::Decrypt, Error> {
         let (_bits, kind, raw) = bits_and_kind_from_mechanism(req.mechanism)?;
-        let (key_id, key_type, privacy) =
-            parse_key_id(req.key, ns).ok_or(Error::ObjectHandleInvalid)?;
-        if privacy != Privacy::Secret {
-            return Err(Error::ObjectHandleInvalid);
-        }
+        let (key_id, key_type) = parse_key_id(req.key, ns).ok_or(Error::RequestNotAvailable)?;
 
         if !matches!(
             (key_type, kind),
@@ -853,19 +1012,16 @@ fn supported(mechanism: Mechanism) -> bool {
     )
 }
 
-impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
-    type Context = Context;
-
-    fn request<P: trussed::Platform>(
+impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
+    fn core_request_internal<P: trussed::Platform>(
         &mut self,
         core_ctx: &mut trussed::types::CoreContext,
-        backend_ctx: &mut Self::Context,
+        backend_ctx: &mut Context,
         request: &Request,
         resources: &mut trussed::service::ServiceResources<P>,
     ) -> Result<trussed::Reply, Error> {
-        Err(Error::RequestNotAvailable)?;
         self.configure()?;
-        debug_now!("Trussed Auth request: {request:?}");
+        debug_now!("Trussed core SE050 request: {request:?}");
 
         // FIXME: Have a real implementation from trussed
         let mut backend_path = core_ctx.path.clone();
@@ -885,12 +1041,14 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
         Ok(match request {
             Request::RandomBytes(request::RandomBytes { count }) => self.random_bytes(*count)?,
             Request::Agree(req) if supported(req.mechanism) => {
-                self.agree(req, se050_keystore, core_keystore, ns)?.into()
+                self.agree(req, core_keystore, ns)?.into()
             }
             Request::Decrypt(req) if supported(req.mechanism) => {
                 self.decrypt(req, se050_keystore, ns, rng)?.into()
             }
-            Request::DeriveKey(req) if supported(req.mechanism) => todo!(),
+            Request::DeriveKey(req) if supported(req.mechanism) => self
+                .derive_key(req, core_keystore, se050_keystore, rng, ns)?
+                .into(),
             Request::DeserializeKey(req) if supported(req.mechanism) => todo!(),
             Request::Encrypt(req) if supported(req.mechanism) => todo!(),
             Request::Delete(request::Delete { key }) => {
@@ -911,5 +1069,22 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
             Request::WrapKey(req) if supported(req.mechanism) => todo!(),
             _ => return Err(Error::RequestNotAvailable),
         })
+    }
+}
+
+impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
+    type Context = Context;
+
+    fn request<P: trussed::Platform>(
+        &mut self,
+        core_ctx: &mut trussed::types::CoreContext,
+        backend_ctx: &mut Self::Context,
+        request: &Request,
+        resources: &mut trussed::service::ServiceResources<P>,
+    ) -> Result<trussed::Reply, Error> {
+        debug_now!("Got request: {request:?}");
+        let res = self.core_request_internal(core_ctx, backend_ctx, request, resources);
+        debug_now!("Got res: {res:?}");
+        res
     }
 }
