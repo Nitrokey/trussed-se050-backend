@@ -143,7 +143,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let buf = &mut [0; 1024];
         self.se
             .run_command(&DeleteSecureObject { object_id }, buf)
-            .or(Err(Error::FunctionFailed))?;
+            .map_err(|_err| {
+                debug_now!("Failed to delete key: {_err:?}");
+                Error::FunctionFailed
+            })?;
         Ok(reply::Delete { success: true })
     }
 
@@ -327,7 +330,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     .se
                     .run_command(&ReadObject::builder().object_id(key).build(), buf)
                     .map_err(|_err| {
-                        error_now!("Failed to derive key: {_err:?}");
+                        error_now!("Failed to read key for derive: {_err:?}");
                         Error::FunctionFailed
                     })?;
                 match is_transient {
@@ -345,7 +348,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                                 &mut [0; 128],
                             )
                             .map_err(|_err| {
-                                error_now!("Failed to derive key: {_err:?}");
+                                error_now!("Failed to store derived key: {_err:?}");
                                 Error::FunctionFailed
                             })?;
                         return Ok(reply::DeriveKey {
@@ -365,7 +368,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                                 &mut [0; 128],
                             )
                             .map_err(|_err| {
-                                error_now!("Failed to derive key: {_err:?}");
+                                error_now!("Failed to store derived key: {_err:?}");
                                 Error::FunctionFailed
                             })?;
                         return Ok(reply::DeriveKey {
@@ -379,7 +382,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     .se
                     .run_command(&ReadObject::builder().object_id(key).build(), buf)
                     .map_err(|_err| {
-                        error_now!("Failed to derive key: {_err:?}");
+                        error_now!("Failed to read key for derive: {_err:?}");
                         Error::FunctionFailed
                     })?;
                 debug_now!("Material: {material:02x?}");
@@ -399,7 +402,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                                 &mut [0; 128],
                             )
                             .map_err(|_err| {
-                                error_now!("Failed to derive key: {_err:?}");
+                                error_now!("Failed to store derived key: {_err:?}");
                                 Error::FunctionFailed
                             })?;
                         return Ok(reply::DeriveKey {
@@ -419,7 +422,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                                 &mut [0; 128],
                             )
                             .map_err(|_err| {
-                                error_now!("Failed to derive key: {_err:?}");
+                                error_now!("Failed to store derived key: {_err:?}");
                                 Error::FunctionFailed
                             })?;
                         return Ok(reply::DeriveKey {
@@ -433,7 +436,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     .se
                     .run_command(&ReadObject::builder().object_id(key).build(), buf)
                     .map_err(|_err| {
-                        error_now!("Failed to derive key: {_err:?}");
+                        error_now!("Failed to read key for derive: {_err:?}");
                         Error::FunctionFailed
                     })?;
                 debug_now!("Material: {material:02x?}");
@@ -454,7 +457,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                                 &mut [0; 128],
                             )
                             .map_err(|_err| {
-                                error_now!("Failed to derive key: {_err:?}");
+                                error_now!("Failed to store derived key: {_err:?}");
                                 Error::FunctionFailed
                             })?;
                         return Ok(reply::DeriveKey {
@@ -474,7 +477,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                                 &mut [0; 128],
                             )
                             .map_err(|_err| {
-                                error_now!("Failed to derive key: {_err:?}");
+                                error_now!("Failed to store derived key: {_err:?}");
                                 Error::FunctionFailed
                             })?;
                         return Ok(reply::DeriveKey {
@@ -961,10 +964,27 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     }
 }
 
+const POLICY: PolicySet<'static> = PolicySet(&[Policy {
+    object_id: ObjectId::INVALID,
+    access_rule: ObjectAccessRule::from_flags(
+        // We use `.union` rather than `|` for const
+        ObjectPolicyFlags::ALLOW_READ
+            .union(ObjectPolicyFlags::ALLOW_WRITE)
+            .union(ObjectPolicyFlags::ALLOW_DELETE)
+            .union(ObjectPolicyFlags::ALLOW_IMPORT_EXPORT)
+            .union(ObjectPolicyFlags::ALLOW_VERIFY)
+            .union(ObjectPolicyFlags::ALLOW_KA)
+            .union(ObjectPolicyFlags::ALLOW_ENC)
+            .union(ObjectPolicyFlags::ALLOW_DEC)
+            .union(ObjectPolicyFlags::ALLOW_SIGN),
+    ),
+}]);
+
 fn generate_ed255(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
     WriteEcKey::builder()
         .transient(transient)
         .key_type(P1KeyType::KeyPair)
+        .policy(POLICY)
         .object_id(object_id)
         .curve(EcCurve::IdEccEd25519)
         .build()
@@ -974,6 +994,7 @@ fn generate_x255(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
     WriteEcKey::builder()
         .transient(transient)
         .key_type(P1KeyType::KeyPair)
+        .policy(POLICY)
         .object_id(object_id)
         .curve(EcCurve::IdEccMontDh25519)
         .build()
@@ -983,6 +1004,7 @@ fn generate_p256(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
     WriteEcKey::builder()
         .transient(transient)
         .key_type(P1KeyType::KeyPair)
+        .policy(POLICY)
         .object_id(object_id)
         .curve(EcCurve::NistP256)
         .build()
@@ -991,6 +1013,7 @@ fn generate_p256(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
 fn generate_rsa(object_id: ObjectId, size: u16) -> WriteRsaKey<'static> {
     WriteRsaKey::builder()
         .key_type(P1KeyType::KeyPair)
+        .policy(POLICY)
         .object_id(object_id)
         .key_size(size.into())
         .build()
