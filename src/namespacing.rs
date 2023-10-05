@@ -110,15 +110,6 @@ enum_number! {
         /// The AES authentication object that protects the Volatile RSA key of same id.
         VolatileRsaIntermediary = 0x7,
         /// Salt value  stored on the SE050
-        /// A persistent key
-        PublicPersistentKey = 0x8,
-        /// A volatile key. The private key data is cleared unless the key is currently in use
-        PublicVolatileKey = 0x9,
-        /// A "volatile" RSA key. Since RSA keys are too large to fit in the SE050 volatile memory, they are auctally stored in persistent storage, and protected by a AES authentication object
-        PublicVolatileRsaKey = 0xA,
-        /// The AES authentication object that protects the Volatile RSA key of same id.
-        PublicVolatileRsaIntermediary = 0xB,
-        /// Salt value  stored on the SE050
         SaltValue = 0xF,
     }
 }
@@ -266,9 +257,6 @@ impl PinObjectIdWithDerived {
 wrapper!(PersistentObjectId, ObjectKind::PersistentKey);
 wrapper!(VolatileObjectId, ObjectKind::VolatileKey);
 wrapper!(VolatileRsaObjectId, ObjectKind::VolatileRsaKey);
-wrapper!(PublicPersistentObjectId, ObjectKind::PublicPersistentKey);
-wrapper!(PublicVolatileObjectId, ObjectKind::PublicVolatileKey);
-wrapper!(PublicVolatileRsaObjectId, ObjectKind::PublicVolatileRsaKey);
 
 impl VolatileRsaObjectId {
     pub(crate) fn key_id(&self) -> ObjectId {
@@ -286,22 +274,6 @@ impl VolatileRsaObjectId {
     }
 }
 
-impl PublicVolatileRsaObjectId {
-    pub(crate) fn key_id(&self) -> ObjectId {
-        self.0
-    }
-
-    pub(crate) fn intermediary_key_id(&self) -> ObjectId {
-        let mut base = self.0 .0;
-        base[3] += 1;
-        assert_eq!(
-            parse_namespace(base[3]).unwrap().1,
-            ObjectKind::PublicVolatileRsaIntermediary
-        );
-        ObjectId(base)
-    }
-}
-
 wrapper!(SaltValueObjectId, ObjectKind::VolatileRsaKey);
 
 enum_from!(
@@ -312,9 +284,6 @@ enum_from!(
         PersistentKey(PersistentObjectId),
         VolatileKey(VolatileObjectId),
         VolatileRsaKey(VolatileRsaObjectId),
-        PublicPersistentKey(PublicPersistentObjectId),
-        PublicVolatileKey(PublicVolatileObjectId),
-        PublicVolatileRsaKey(PublicVolatileRsaObjectId),
         SaltValue(SaltValueObjectId),
     }
 );
@@ -334,11 +303,6 @@ impl ParsedObjectId {
                 VolatileRsaObjectId::from_value(id).into()
             }
             ObjectKind::SaltValue => SaltValueObjectId::from_value(id).into(),
-            ObjectKind::PublicPersistentKey => PublicPersistentObjectId::from_value(id).into(),
-            ObjectKind::PublicVolatileKey => PublicVolatileObjectId::from_value(id).into(),
-            ObjectKind::PublicVolatileRsaKey | ObjectKind::PublicVolatileRsaIntermediary => {
-                PublicVolatileRsaObjectId::from_value(id).into()
-            }
         };
         Some((ns, parsed))
     }
