@@ -296,11 +296,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             ParsedObjectId::Pin(_)
             | ParsedObjectId::PinWithDerived(_)
             | ParsedObjectId::SaltValue(_) => return Err(Error::MechanismParamInvalid),
-            ParsedObjectId::PersistentKey(k) => {
-                self.derive_raw_key(req, k.0, parsed_ty, core_keystore, rng, ns)
-            }
+            ParsedObjectId::PersistentKey(k) => self.derive_raw_key(req, k.0, parsed_ty, rng, ns),
             ParsedObjectId::VolatileKey(k) => {
-                self.derive_raw_key(req, k.0, parsed_ty, core_keystore, rng, ns)
+                self.derive_volatile_key(req, k.0, parsed_ty, se050_keystore, rng, ns)
             }
             ParsedObjectId::VolatileRsaKey(k) => {
                 self.derive_volatile_rsa_key(req, k, parsed_ty, core_keystore, se050_keystore, ns)
@@ -313,12 +311,64 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         }
     }
 
+    fn reimport_volatile_key(
+        &mut self,
+        key: KeyId,
+        kind: Kind,
+        se050_keystore: &mut impl Keystore,
+        obj: ObjectId,
+    ) -> Result<(), Error> {
+        let material = se050_keystore.load_key(Secrecy::Secret, Some(kind), &key)?;
+        let parsed: VolatileKeyMaterialRef = trussed::cbor_deserialize(&material.material)
+            .map_err(|_err| {
+                error!("Failed to parsed volatile key data: {_err:?}");
+                Error::CborError
+            })?;
+
+        assert_eq!(parsed.object_id.0, obj);
+        self.se
+            .run_command(
+                &ImportObject::builder()
+                    .object_id(obj)
+                    .serialized_object(parsed.exported_material)
+                    .build(),
+                &mut [0; 128],
+            )
+            .map_err(|_err| {
+                error!("Failed to re-import key for derive: {_err:?}");
+                Error::FunctionFailed
+            })?;
+        Ok(())
+    }
+
+    fn derive_volatile_key<R: CryptoRng + RngCore>(
+        &mut self,
+        req: &request::DeriveKey,
+        key: ObjectId,
+        ty: KeyType,
+        se050_keystore: &mut impl Keystore,
+        rng: &mut R,
+        ns: NamespaceValue,
+    ) -> Result<reply::DeriveKey, Error> {
+        let kind = match ty {
+            KeyType::Ed255 => Kind::Ed255,
+            KeyType::X255 => Kind::X255,
+            KeyType::P256 => Kind::P256,
+            KeyType::Rsa2048 | KeyType::Rsa3072 | KeyType::Rsa4096 => {
+                unreachable!("Volatile rsa keys are derived in a separate function")
+            }
+        };
+        self.reimport_volatile_key(req.base_key, kind, se050_keystore, key)?;
+        let res = self.derive_raw_key(req, key, ty, rng, ns)?;
+        self.reselect()?;
+        Ok(res)
+    }
+
     fn derive_raw_key<R: CryptoRng + RngCore>(
         &mut self,
         req: &request::DeriveKey,
         key: ObjectId,
         ty: KeyType,
-        core_keystore: &mut impl Keystore,
         rng: &mut R,
         ns: NamespaceValue,
     ) -> Result<reply::DeriveKey, Error> {
@@ -486,7 +536,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     }
                 }
             }
-            _ => todo!(),
+            KeyType::Rsa2048 | KeyType::Rsa3072 | KeyType::Rsa4096 => {
+                todo!()
+            }
         }
     }
 
@@ -758,6 +810,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         &mut self,
         req: &request::Agree,
         core_keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
         ns: NamespaceValue,
     ) -> Result<reply::Agree, Error> {
         let (priv_parsed_key, priv_parsed_ty) =
@@ -769,11 +822,14 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             return Err(trussed::Error::MechanismParamInvalid);
         }
 
-        if !matches!(
-            (req.mechanism, priv_parsed_ty),
-            (Mechanism::P256, KeyType::P256) | (Mechanism::X255, KeyType::X255)
-        ) {
-            return Err(Error::MechanismParamInvalid);
+        let kind = match (req.mechanism, priv_parsed_ty) {
+            (Mechanism::P256, KeyType::P256) => Kind::P256,
+            (Mechanism::X255, KeyType::X255) => Kind::X255,
+            _ => return Err(Error::MechanismParamInvalid),
+        };
+
+        if let ParsedObjectId::VolatileKey(priv_volatile) = priv_parsed_key {
+            self.reimport_volatile_key(req.private_key, kind, se050_keystore, priv_volatile.0)?;
         }
 
         let (ParsedObjectId::VolatileKey(VolatileObjectId(priv_obj))
@@ -1064,7 +1120,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(match request {
             Request::RandomBytes(request::RandomBytes { count }) => self.random_bytes(*count)?,
             Request::Agree(req) if supported(req.mechanism) => {
-                self.agree(req, core_keystore, ns)?.into()
+                self.agree(req, core_keystore, se050_keystore, ns)?.into()
             }
             Request::Decrypt(req) if supported(req.mechanism) => {
                 self.decrypt(req, se050_keystore, ns, rng)?.into()
