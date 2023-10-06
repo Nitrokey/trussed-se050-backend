@@ -13,7 +13,7 @@ use se05x::{
             RsaDecrypt, VerifySessionUserId, WriteEcKey, WriteRsaKey, WriteSymmKey, WriteUserId,
         },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
-        EcCurve, ObjectId, P1KeyType, RsaEncryptionAlgo, Se05XResult, SymmKeyType,
+        EcCurve, ObjectId, P1KeyType, RsaEncryptionAlgo, RsaKeyComponent, Se05XResult, SymmKeyType,
     },
     t1::I2CForT1,
 };
@@ -24,7 +24,7 @@ use trussed::{
     config::MAX_MESSAGE_LENGTH,
     key::{self, Kind, Secrecy},
     service::Keystore,
-    types::{KeyId, Location, Mechanism, Message, Vec},
+    types::{KeyId, Location, Mechanism, Message},
     Bytes, Error,
 };
 
@@ -36,15 +36,16 @@ use crate::{
     Context, Se050Backend, BACKEND_DIR,
 };
 
+#[derive(Clone, Copy, Deserialize, Serialize)]
+struct RsaPublicKey<'a> {
+    #[serde(serialize_with = "serde_bytes::serialize")]
+    modulus: &'a [u8],
+    #[serde(serialize_with = "serde_bytes::serialize")]
+    exponent: &'a [u8],
+}
+
 const BUFFER_LEN: usize = 2048;
 const CORE_DIR: &str = "se050-core";
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) enum PersistentMaterial {
-    Persistent(PersistentObjectId),
-    Volatile(VolatileObjectId),
-    VolatileRsa(VolatileRsaObjectId),
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct VolatileKeyMaterial {
@@ -305,7 +306,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 ns,
             ),
             ParsedObjectId::VolatileRsaKey(k) => {
-                self.derive_volatile_rsa_key(req, k, parsed_ty, core_keystore, se050_keystore, ns)
+                self.derive_volatile_rsa_key(req, k, parsed_ty, core_keystore, ns, rng)
             }
         }
     }
@@ -432,21 +433,154 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Ok(reply::DeriveKey { key: result })
             }
             KeyType::Rsa2048 | KeyType::Rsa3072 | KeyType::Rsa4096 => {
-                todo!()
+                return self.derive_rsa_key(req, key, ty, core_keystore, ns);
             }
         }
     }
 
-    fn derive_volatile_rsa_key(
+    fn derive_rsa_key(
+        &mut self,
+        req: &request::DeriveKey,
+        key: ObjectId,
+        ty: KeyType,
+        core_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<reply::DeriveKey, Error> {
+        let kind = match ty {
+            KeyType::Rsa2048 => Kind::Rsa2048,
+            KeyType::Rsa3072 => Kind::Rsa3072,
+            KeyType::Rsa4096 => Kind::Rsa4096,
+            _ => unreachable!("Non rsa keys are not hanndled"),
+        };
+        let buf = &mut [0; 550];
+        let modulus = self
+            .se
+            .run_command(
+                &ReadObject::builder()
+                    .object_id(key)
+                    .offset(0.into())
+                    .rsa_key_component(RsaKeyComponent::Mod)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error!("Failed to read RSA public key: {_err:?}");
+                Error::FunctionFailed
+            })?
+            .data;
+        let buf = &mut [0; 32];
+        let exponent = self
+            .se
+            .run_command(
+                &ReadObject::builder()
+                    .object_id(key)
+                    .offset(0.into())
+                    .rsa_key_component(RsaKeyComponent::PubExp)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error!("Failed to read RSA public key: {_err:?}");
+                Error::FunctionFailed
+            })?
+            .data;
+        let material =
+            trussed::cbor_serialize_bytes::<_, 600>(&RsaPublicKey { modulus, exponent }).unwrap();
+        let key = core_keystore.store_key(
+            req.attributes.persistence,
+            Secrecy::Public,
+            kind,
+            &material,
+        )?;
+        Ok(reply::DeriveKey { key })
+    }
+
+    fn derive_volatile_rsa_key<R: CryptoRng + RngCore>(
         &mut self,
         req: &request::DeriveKey,
         key: VolatileRsaObjectId,
         ty: KeyType,
         core_keystore: &mut impl Keystore,
-        se050_keystore: &mut impl Keystore,
         ns: NamespaceValue,
+        rng: &mut R,
     ) -> Result<reply::DeriveKey, Error> {
-        todo!()
+        let kind = match ty {
+            KeyType::Rsa2048 => Kind::Rsa2048,
+            KeyType::Rsa3072 => Kind::Rsa3072,
+            KeyType::Rsa4096 => Kind::Rsa4096,
+            _ => unreachable!("Non rsa keys are not hanndled"),
+        };
+        let data = core_keystore.load_key(Secrecy::Secret, Some(kind), &req.base_key)?;
+        let data: VolatileRsaKey = cbor_deserialize(&data.material).or(Err(Error::CborError))?;
+        let buf = &mut [0; 550];
+        let session_id = self
+            .se
+            .run_command(
+                &CreateSession {
+                    object_id: key.intermediary_key_id(),
+                },
+                buf,
+            )
+            .map_err(|_err| {
+                debug!("Failed to create session");
+                Error::FunctionFailed
+            })?
+            .session_id;
+        self.se
+            .authenticate_aes128_session(session_id, &data.intermediary_key, rng)
+            .map_err(|_err| {
+                debug!("Failed to authenticate session");
+                Error::FunctionFailed
+            })?;
+        let modulus = self
+            .se
+            .run_session_command(
+                session_id,
+                &ReadObject::builder()
+                    .object_id(key.key_id())
+                    .offset(0.into())
+                    .rsa_key_component(RsaKeyComponent::Mod)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error!("Failed to read RSA public key: {_err:?}");
+                Error::FunctionFailed
+            })?
+            .data;
+        let buf = &mut [0; 32];
+        let exponent = self
+            .se
+            .run_session_command(
+                session_id,
+                &ReadObject::builder()
+                    .object_id(key.key_id())
+                    .offset(0.into())
+                    .rsa_key_component(RsaKeyComponent::PubExp)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error!("Failed to read RSA public key: {_err:?}");
+                Error::FunctionFailed
+            })?
+            .data;
+        let material =
+            trussed::cbor_serialize_bytes::<_, 600>(&RsaPublicKey { modulus, exponent }).unwrap();
+        let key = core_keystore.store_key(
+            req.attributes.persistence,
+            Secrecy::Public,
+            kind,
+            &material,
+        )?;
+        self.se
+            .run_session_command(session_id, &CloseSession {}, &mut [0; 128])
+            .map_err(|_err| {
+                error!("Failed to decrypt {_err:?}");
+                Error::FunctionFailed
+            })?;
+
+        return Ok(reply::DeriveKey { key });
     }
 
     fn generate_key<R: CryptoRng + RngCore>(
@@ -894,6 +1028,15 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             _ => return Err(Error::ObjectHandleInvalid),
         }
     }
+
+    fn encrypt(
+        &mut self,
+        req: &request::Encrypt,
+        core_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<reply::Encrypt, Error> {
+        todo!()
+    }
 }
 
 const POLICY: PolicySet<'static> = PolicySet(&[Policy {
@@ -1004,8 +1147,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Request::DeriveKey(req) if supported(req.mechanism) => self
                 .derive_key(req, core_keystore, se050_keystore, rng, ns)?
                 .into(),
-            Request::DeserializeKey(req) if supported(req.mechanism) => todo!(),
             Request::Encrypt(req) if supported(req.mechanism) => todo!(),
+            Request::DeserializeKey(req) if supported(req.mechanism) => todo!(),
             Request::Delete(request::Delete { key }) => {
                 self.delete(key, ns, se050_keystore)?.into()
             }
