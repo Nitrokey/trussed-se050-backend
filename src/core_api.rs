@@ -10,7 +10,8 @@ use se05x::{
         commands::{
             CheckObjectExists, CloseSession, CreateSession, DeleteSecureObject,
             EcdhGenerateSharedSecret, ExportObject, GetRandom, ImportObject, ReadObject,
-            RsaDecrypt, VerifySessionUserId, WriteEcKey, WriteRsaKey, WriteSymmKey, WriteUserId,
+            RsaDecrypt, RsaEncrypt, VerifySessionUserId, WriteEcKey, WriteRsaKey, WriteSymmKey,
+            WriteUserId,
         },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
         EcCurve, ObjectId, P1KeyType, RsaEncryptionAlgo, RsaKeyComponent, Se05XResult, SymmKeyType,
@@ -30,8 +31,8 @@ use trussed::{
 
 use crate::{
     namespacing::{
-        key_id_for_obj, parse_key_id, KeyType, NamespaceValue, ParsedObjectId, PersistentObjectId,
-        Privacy, VolatileObjectId, VolatileRsaObjectId,
+        generate_object_id_ns, key_id_for_obj, parse_key_id, KeyType, NamespaceValue, ObjectKind,
+        ParsedObjectId, PersistentObjectId, Privacy, VolatileObjectId, VolatileRsaObjectId,
     },
     Context, Se050Backend, BACKEND_DIR,
 };
@@ -97,11 +98,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 &mut buf,
             )
             .map_err(|_err| {
-                error!("Failed to get random: {:?}", _err);
+                error_now!("Failed to get random: {:?}", _err);
                 Error::FunctionFailed
             })?;
         if res.data.len() != count {
-            error!("Bad random length");
+            error_now!("Bad random length");
             return Err(Error::FunctionFailed);
         }
         Ok(reply::RandomBytes {
@@ -321,7 +322,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let material = se050_keystore.load_key(Secrecy::Secret, Some(kind), &key)?;
         let parsed: VolatileKeyMaterialRef = trussed::cbor_deserialize(&material.material)
             .map_err(|_err| {
-                error!("Failed to parsed volatile key data: {_err:?}");
+                error_now!("Failed to parsed volatile key data: {_err:?}");
                 Error::CborError
             })?;
 
@@ -335,7 +336,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 &mut [0; 128],
             )
             .map_err(|_err| {
-                error!("Failed to re-import key for derive: {_err:?}");
+                error_now!("Failed to re-import key for derive: {_err:?}");
                 Error::FunctionFailed
             })?;
         Ok(())
@@ -458,13 +459,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             .run_command(
                 &ReadObject::builder()
                     .object_id(key)
-                    .offset(0.into())
                     .rsa_key_component(RsaKeyComponent::Mod)
                     .build(),
                 buf,
             )
             .map_err(|_err| {
-                error!("Failed to read RSA public key: {_err:?}");
+                error_now!("Failed to read RSA public key: {_err:?}");
                 Error::FunctionFailed
             })?
             .data;
@@ -474,13 +474,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             .run_command(
                 &ReadObject::builder()
                     .object_id(key)
-                    .offset(0.into())
                     .rsa_key_component(RsaKeyComponent::PubExp)
                     .build(),
                 buf,
             )
             .map_err(|_err| {
-                error!("Failed to read RSA public key: {_err:?}");
+                error_now!("Failed to read RSA public key: {_err:?}");
                 Error::FunctionFailed
             })?
             .data;
@@ -544,7 +543,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error!("Failed to read RSA public key: {_err:?}");
+                error_now!("Failed to read RSA public key: {_err:?}");
                 Error::FunctionFailed
             })?
             .data;
@@ -561,7 +560,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error!("Failed to read RSA public key: {_err:?}");
+                error_now!("Failed to read RSA public key: {_err:?}");
                 Error::FunctionFailed
             })?
             .data;
@@ -576,7 +575,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         self.se
             .run_session_command(session_id, &CloseSession {}, &mut [0; 128])
             .map_err(|_err| {
-                error!("Failed to decrypt {_err:?}");
+                error_now!("Failed to decrypt {_err:?}");
                 Error::FunctionFailed
             })?;
 
@@ -944,14 +943,14 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error!("Failed to decrypt {_err:?}");
+                error_now!("Failed to decrypt {_err:?}");
                 Error::FunctionFailed
             })?
             .plaintext;
         self.se
             .run_session_command(session_id, &CloseSession {}, &mut [0; 128])
             .map_err(|_err| {
-                error!("Failed to decrypt {_err:?}");
+                error_now!("Failed to decrypt {_err:?}");
                 Error::FunctionFailed
             })?;
 
@@ -978,7 +977,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error!("Failed to decrypt {_err:?}");
+                error_now!("Failed to decrypt {_err:?}");
                 Error::FunctionFailed
             })?;
         return Ok(reply::Decrypt {
@@ -1029,13 +1028,87 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         }
     }
 
-    fn encrypt(
+    fn encrypt<R: CryptoRng + RngCore>(
         &mut self,
         req: &request::Encrypt,
         core_keystore: &mut impl Keystore,
         ns: NamespaceValue,
+        rng: &mut R,
     ) -> Result<reply::Encrypt, Error> {
-        todo!()
+        let (kind, algo, size) = match req.mechanism {
+            Mechanism::Rsa2048Pkcs1v15 => (Kind::Rsa2048, RsaEncryptionAlgo::Pkcs1, 2048),
+            Mechanism::Rsa3072Pkcs1v15 => (Kind::Rsa3072, RsaEncryptionAlgo::Pkcs1, 3072),
+            Mechanism::Rsa4096Pkcs1v15 => (Kind::Rsa4096, RsaEncryptionAlgo::Pkcs1, 4096),
+            Mechanism::Rsa2048Raw => (Kind::Rsa2048, RsaEncryptionAlgo::NoPad, 2048),
+            Mechanism::Rsa3072Raw => (Kind::Rsa3072, RsaEncryptionAlgo::NoPad, 3072),
+            Mechanism::Rsa4096Raw => (Kind::Rsa4096, RsaEncryptionAlgo::NoPad, 4096),
+            _ => return Err(Error::MechanismInvalid),
+        };
+        let material = core_keystore.load_key(Secrecy::Public, Some(kind), &req.key)?;
+        let parsed: RsaPublicKey =
+            trussed::cbor_deserialize(&material.material).map_err(|_err| {
+                error_now!("Failed to parse volatile rsa key data: {_err:?}");
+                Error::CborError
+            })?;
+
+        let buf = &mut [0; 1024];
+        let id = generate_object_id_ns(rng, ns, ObjectKind::PublicRsaTemporary);
+
+        self.se
+            .run_command(
+                &WriteRsaKey::builder()
+                    .key_type(P1KeyType::Public)
+                    .key_size(size.into())
+                    .n(parsed.modulus)
+                    .object_id(id)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error_now!("Failed to re-import modulus for encrypt: {_err:?}");
+                Error::FunctionFailed
+            })?;
+        self.se
+            .run_command(
+                &WriteRsaKey::builder()
+                    .e(parsed.exponent)
+                    .object_id(id)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error_now!("Failed to re-import key for encrypt: {_err:?}");
+                Error::FunctionFailed
+            })?;
+
+        let res = self
+            .se
+            .run_command(
+                &RsaEncrypt::builder()
+                    .key_id(id)
+                    .algo(algo)
+                    .plaintext(&req.message)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error_now!("Failed to delete key after encrypt: {_err:?}");
+                Error::FunctionFailed
+            })?;
+
+        let ret = reply::Encrypt {
+            // ciphertext can't be larger than buffer anyway.
+            ciphertext: Bytes::from_slice(res.ciphertext).unwrap(),
+            nonce: Default::default(),
+            tag: Default::default(),
+        };
+        self.se
+            .run_command(&DeleteSecureObject { object_id: id }, buf)
+            .map_err(|_err| {
+                error_now!("Failed to delete key after encrypt: {_err:?}");
+                Error::FunctionFailed
+            })?;
+        Ok(ret)
     }
 }
 
@@ -1147,7 +1220,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Request::DeriveKey(req) if supported(req.mechanism) => self
                 .derive_key(req, core_keystore, se050_keystore, rng, ns)?
                 .into(),
-            Request::Encrypt(req) if supported(req.mechanism) => todo!(),
+            Request::Encrypt(req) if supported(req.mechanism) => {
+                self.encrypt(req, core_keystore, ns, rng)?.into()
+            }
             Request::DeserializeKey(req) if supported(req.mechanism) => todo!(),
             Request::Delete(request::Delete { key }) => {
                 self.delete(key, ns, se050_keystore)?.into()
