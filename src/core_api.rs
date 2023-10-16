@@ -28,6 +28,7 @@ use trussed::{
     types::{KeyId, Location, Mechanism, Message},
     Bytes, Error,
 };
+use trussed_rsa_alloc::RsaPublicParts;
 
 use crate::{
     namespacing::{
@@ -36,14 +37,6 @@ use crate::{
     },
     Context, Se050Backend, BACKEND_DIR,
 };
-
-#[derive(Clone, Copy, Deserialize, Serialize)]
-struct RsaPublicKey<'a> {
-    #[serde(serialize_with = "serde_bytes::serialize")]
-    modulus: &'a [u8],
-    #[serde(serialize_with = "serde_bytes::serialize")]
-    exponent: &'a [u8],
-}
 
 const BUFFER_LEN: usize = 2048;
 const CORE_DIR: &str = "se050-core";
@@ -483,8 +476,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Error::FunctionFailed
             })?
             .data;
-        let material =
-            trussed::cbor_serialize_bytes::<_, 600>(&RsaPublicKey { modulus, exponent }).unwrap();
+        let material = RsaPublicParts {
+            n: modulus,
+            e: exponent,
+        }
+        .serialize()
+        .unwrap();
         let key = core_keystore.store_key(
             req.attributes.persistence,
             Secrecy::Public,
@@ -564,8 +561,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Error::FunctionFailed
             })?
             .data;
-        let material =
-            trussed::cbor_serialize_bytes::<_, 600>(&RsaPublicKey { modulus, exponent }).unwrap();
+        let material = RsaPublicParts {
+            n: modulus,
+            e: exponent,
+        }
+        .serialize()
+        .unwrap();
         let key = core_keystore.store_key(
             req.attributes.persistence,
             Secrecy::Public,
@@ -1045,11 +1046,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             _ => return Err(Error::MechanismInvalid),
         };
         let material = core_keystore.load_key(Secrecy::Public, Some(kind), &req.key)?;
-        let parsed: RsaPublicKey =
-            trussed::cbor_deserialize(&material.material).map_err(|_err| {
-                error_now!("Failed to parse volatile rsa key data: {_err:?}");
-                Error::CborError
-            })?;
+        let parsed = RsaPublicParts::deserialize(&material.material).map_err(|_err| {
+            error_now!("Failed to parse volatile rsa key data: {_err:?}");
+            Error::CborError
+        })?;
 
         let buf = &mut [0; 1024];
         let id = generate_object_id_ns(rng, ns, ObjectKind::PublicRsaTemporary);
@@ -1059,7 +1059,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 &WriteRsaKey::builder()
                     .key_type(P1KeyType::Public)
                     .key_size(size.into())
-                    .n(parsed.modulus)
+                    .n(parsed.n)
                     .object_id(id)
                     .build(),
                 buf,
@@ -1070,10 +1070,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             })?;
         self.se
             .run_command(
-                &WriteRsaKey::builder()
-                    .e(parsed.exponent)
-                    .object_id(id)
-                    .build(),
+                &WriteRsaKey::builder().e(parsed.e).object_id(id).build(),
                 buf,
             )
             .map_err(|_err| {
@@ -1109,6 +1106,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Error::FunctionFailed
             })?;
         Ok(ret)
+    }
+
+    fn deserialize_key(
+        &mut self,
+        req: &request::DeserializeKey,
+    ) -> Result<reply::DeserializeKey, Error> {
+        todo!()
     }
 }
 
