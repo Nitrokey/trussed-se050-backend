@@ -25,7 +25,7 @@ use trussed::{
     config::MAX_MESSAGE_LENGTH,
     key::{self, Kind, Secrecy},
     service::Keystore,
-    types::{KeyId, Location, Mechanism, Message},
+    types::{KeyId, KeySerialization, Location, Mechanism, Message},
     Bytes, Error,
 };
 use trussed_rsa_alloc::RsaPublicParts;
@@ -1111,8 +1111,121 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     fn deserialize_key(
         &mut self,
         req: &request::DeserializeKey,
+        core_keystore: &mut impl Keystore,
     ) -> Result<reply::DeserializeKey, Error> {
-        todo!()
+        match req.mechanism {
+            Mechanism::P256 => self.deserialize_p256_key(req, core_keystore),
+            Mechanism::X255 => self.deserialize_x255_key(req, core_keystore),
+            Mechanism::Ed255 => self.deserialize_ed255_key(req, core_keystore),
+            Mechanism::Rsa2048Pkcs1v15 => {
+                self.deserialize_rsa_key(req, Kind::Rsa2048, core_keystore)
+            }
+            Mechanism::Rsa3072Pkcs1v15 => {
+                self.deserialize_rsa_key(req, Kind::Rsa3072, core_keystore)
+            }
+            Mechanism::Rsa4096Pkcs1v15 => {
+                self.deserialize_rsa_key(req, Kind::Rsa4096, core_keystore)
+            }
+            _ => Err(Error::MechanismParamInvalid),
+        }
+    }
+
+    fn deserialize_p256_key(
+        &mut self,
+        req: &request::DeserializeKey,
+        core_keystore: &mut impl Keystore,
+    ) -> Result<reply::DeserializeKey, Error> {
+        if req.format != KeySerialization::Raw {
+            debug_now!("Unsupported P256 public format: {:?}", req.format);
+            return Err(Error::FunctionFailed);
+        }
+
+        if req.serialized_key.len() != 64 {
+            debug_now!(
+                "Unsupported P256 public key length: {}",
+                req.serialized_key.len()
+            );
+            return Err(Error::MechanismParamInvalid);
+        }
+        let mut material = Bytes::<65>::new();
+        material.push(0x04).unwrap();
+        material.extend_from_slice(&req.serialized_key).unwrap();
+        let key = core_keystore.store_key(
+            req.attributes.persistence,
+            Secrecy::Public,
+            Kind::P256,
+            &material,
+        )?;
+        Ok(reply::DeserializeKey { key })
+    }
+    fn deserialize_x255_key(
+        &mut self,
+        req: &request::DeserializeKey,
+        core_keystore: &mut impl Keystore,
+    ) -> Result<reply::DeserializeKey, Error> {
+        if req.format != KeySerialization::Raw {
+            debug_now!("Unsupported x255 public format: {:?}", req.format);
+            return Err(Error::FunctionFailed);
+        }
+
+        if req.serialized_key.len() != 32 {
+            debug_now!(
+                "Unsupported x255 public key length: {}",
+                req.serialized_key.len()
+            );
+            return Err(Error::MechanismParamInvalid);
+        }
+        let key = core_keystore.store_key(
+            req.attributes.persistence,
+            Secrecy::Public,
+            Kind::X255,
+            &req.serialized_key,
+        )?;
+        Ok(reply::DeserializeKey { key })
+    }
+    fn deserialize_ed255_key(
+        &mut self,
+        req: &request::DeserializeKey,
+        core_keystore: &mut impl Keystore,
+    ) -> Result<reply::DeserializeKey, Error> {
+        if req.format != KeySerialization::Raw {
+            debug_now!("Unsupported ed255 public format: {:?}", req.format);
+            return Err(Error::FunctionFailed);
+        }
+
+        if req.serialized_key.len() != 32 {
+            debug_now!(
+                "Unsupported ed255 public key length: {}",
+                req.serialized_key.len()
+            );
+            return Err(Error::MechanismParamInvalid);
+        }
+        let key = core_keystore.store_key(
+            req.attributes.persistence,
+            Secrecy::Public,
+            Kind::Ed255,
+            &req.serialized_key,
+        )?;
+        Ok(reply::DeserializeKey { key })
+    }
+
+    fn deserialize_rsa_key(
+        &mut self,
+        req: &request::DeserializeKey,
+        kind: Kind,
+        core_keystore: &mut impl Keystore,
+    ) -> Result<reply::DeserializeKey, Error> {
+        if req.format != KeySerialization::RsaParts {
+            debug_now!("Unsupported rsa public format: {:?}", req.format);
+            return Err(Error::FunctionFailed);
+        }
+        let material = &req.serialized_key;
+        // Check the validity of the key
+        let _ =
+            RsaPublicParts::deserialize(material).map_err(|_err| Error::MechanismParamInvalid)?;
+        let key =
+            core_keystore.store_key(req.attributes.persistence, Secrecy::Public, kind, material)?;
+        Ok(reply::DeserializeKey { key })
     }
 }
 
@@ -1227,7 +1340,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Request::Encrypt(req) if supported(req.mechanism) => {
                 self.encrypt(req, core_keystore, ns, rng)?.into()
             }
-            Request::DeserializeKey(req) if supported(req.mechanism) => todo!(),
+            Request::DeserializeKey(req) if supported(req.mechanism) => {
+                self.deserialize_key(req, core_keystore)?.into()
+            }
+            Request::SerializeKey(req) if supported(req.mechanism) => todo!(),
             Request::Delete(request::Delete { key }) => {
                 self.delete(key, ns, se050_keystore)?.into()
             }
@@ -1238,7 +1354,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 self.generate_key(req, se050_keystore, rng, ns)?.into()
             }
             Request::GenerateSecretKey(_req) => todo!(),
-            Request::SerializeKey(req) if supported(req.mechanism) => todo!(),
             Request::Sign(req) if supported(req.mechanism) => todo!(),
             Request::UnsafeInjectKey(req) if supported(req.mechanism) => todo!(),
             Request::UnwrapKey(req) if supported(req.mechanism) => todo!(),
