@@ -300,7 +300,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 ns,
             ),
             ParsedObjectId::VolatileRsaKey(k) => {
-                self.derive_volatile_rsa_key(req, k, parsed_ty, core_keystore, ns, rng)
+                self.derive_volatile_rsa_key(req, k, parsed_ty, se050_keystore, ns, rng)
             }
         }
     }
@@ -496,7 +496,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         req: &request::DeriveKey,
         key: VolatileRsaObjectId,
         ty: KeyType,
-        core_keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
         ns: NamespaceValue,
         rng: &mut R,
     ) -> Result<reply::DeriveKey, Error> {
@@ -506,7 +506,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             KeyType::Rsa4096 => Kind::Rsa4096,
             _ => unreachable!("Non rsa keys are not hanndled"),
         };
-        let data = core_keystore.load_key(Secrecy::Secret, Some(kind), &req.base_key)?;
+        let data = se050_keystore
+            .load_key(Secrecy::Secret, Some(kind), &req.base_key)
+            .map_err(|err| {
+                debug_now!("Failed to load RSA key: {err:?}");
+                err
+            })?;
         let data: VolatileRsaKey = cbor_deserialize(&data.material).or(Err(Error::CborError))?;
         let buf = &mut [0; 550];
         let session_id = self
@@ -534,7 +539,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 session_id,
                 &ReadObject::builder()
                     .object_id(key.key_id())
-                    .offset(0.into())
                     .rsa_key_component(RsaKeyComponent::Mod)
                     .build(),
                 buf,
@@ -551,7 +555,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 session_id,
                 &ReadObject::builder()
                     .object_id(key.key_id())
-                    .offset(0.into())
                     .rsa_key_component(RsaKeyComponent::PubExp)
                     .build(),
                 buf,
@@ -567,7 +570,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         }
         .serialize()
         .unwrap();
-        let key = core_keystore.store_key(
+        let key = se050_keystore.store_key(
             req.attributes.persistence,
             Secrecy::Public,
             kind,
@@ -586,21 +589,22 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     fn generate_key<R: CryptoRng + RngCore>(
         &mut self,
         req: &request::GenerateKey,
-        keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
         rng: &mut R,
         ns: NamespaceValue,
     ) -> Result<reply::GenerateKey, Error> {
         match req.attributes.persistence {
-            Location::Volatile => self.generate_volatile_key(req, keystore, rng, ns),
+            Location::Volatile => self.generate_volatile_key(req, se050_keystore, rng, ns),
             Location::Internal | Location::External => self.generate_persistent_key(req, rng, ns),
         }
     }
 
     fn generate_volatile_rsa_key<R: CryptoRng + RngCore>(
         &mut self,
-        keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
         size: u16,
         kind: Kind,
+        ty: KeyType,
         rng: &mut R,
         ns: NamespaceValue,
     ) -> Result<reply::GenerateKey, Error> {
@@ -677,14 +681,21 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             buf,
         )
         .or(Err(Error::CborError))?;
-        let key = keystore.store_key(Location::Volatile, Secrecy::Secret, kind, key_material)?;
+        let key = key_id_for_obj(se_id.0, ty);
+        se050_keystore.overwrite_key(
+            Location::Volatile,
+            Secrecy::Secret,
+            kind,
+            &key,
+            key_material,
+        )?;
         Ok(reply::GenerateKey { key })
     }
 
     fn generate_volatile_key<R: CryptoRng + RngCore>(
         &mut self,
         req: &request::GenerateKey,
-        keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
         rng: &mut R,
         ns: NamespaceValue,
     ) -> Result<reply::GenerateKey, Error> {
@@ -693,13 +704,34 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Mechanism::X255 => (Kind::X255, KeyType::X255),
             Mechanism::P256 => (Kind::P256, KeyType::P256),
             Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => {
-                return self.generate_volatile_rsa_key(keystore, 2048, Kind::Rsa2048, rng, ns);
+                return self.generate_volatile_rsa_key(
+                    se050_keystore,
+                    2048,
+                    Kind::Rsa2048,
+                    KeyType::Rsa2048,
+                    rng,
+                    ns,
+                );
             }
             Mechanism::Rsa3072Raw | Mechanism::Rsa3072Pkcs1v15 => {
-                return self.generate_volatile_rsa_key(keystore, 3072, Kind::Rsa3072, rng, ns);
+                return self.generate_volatile_rsa_key(
+                    se050_keystore,
+                    3072,
+                    Kind::Rsa3072,
+                    KeyType::Rsa3072,
+                    rng,
+                    ns,
+                );
             }
             Mechanism::Rsa4096Raw | Mechanism::Rsa4096Pkcs1v15 => {
-                return self.generate_volatile_rsa_key(keystore, 4096, Kind::Rsa4096, rng, ns);
+                return self.generate_volatile_rsa_key(
+                    se050_keystore,
+                    4096,
+                    Kind::Rsa4096,
+                    KeyType::Rsa4096,
+                    rng,
+                    ns,
+                );
             }
             // Other mechanisms are filtered through the `supported` function
             _ => unreachable!(),
@@ -750,7 +782,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             exported_material: exported,
         })
         .or(Err(Error::FunctionFailed))?;
-        keystore.overwrite_key(Location::Volatile, Secrecy::Secret, kind, &key, &material)?;
+        se050_keystore.overwrite_key(Location::Volatile, Secrecy::Secret, kind, &key, &material)?;
 
         // Remove any data from the transient storage
         self.reselect()?;
