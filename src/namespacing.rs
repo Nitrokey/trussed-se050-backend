@@ -109,8 +109,8 @@ enum_number! {
         VolatileRsaKey = 0x6,
         /// The AES authentication object that protects the Volatile RSA key of same id.
         VolatileRsaIntermediary = 0x7,
-        /// Temporary public RSA key being loaded into the SE050 for 1 operation. Must be deleted just after
-        PublicRsaTemporary = 0x8,
+        /// Temporary public key being loaded into the SE050 for 1 operation. Must be deleted just after
+        PublicTemporary = 0x8,
         /// Salt value  stored on the SE050
         SaltValue = 0xF,
     }
@@ -305,7 +305,7 @@ impl ParsedObjectId {
                 VolatileRsaObjectId::from_value(id).into()
             }
             ObjectKind::SaltValue => SaltValueObjectId::from_value(id).into(),
-            ObjectKind::PublicRsaTemporary => return None,
+            ObjectKind::PublicTemporary => return None,
         };
         Some((ns, parsed))
     }

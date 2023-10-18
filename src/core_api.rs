@@ -9,12 +9,13 @@ use se05x::{
     se05x::{
         commands::{
             CheckObjectExists, CloseSession, CreateSession, DeleteSecureObject,
-            EcdhGenerateSharedSecret, ExportObject, GetRandom, ImportObject, ReadObject,
-            RsaDecrypt, RsaEncrypt, VerifySessionUserId, WriteEcKey, WriteRsaKey, WriteSymmKey,
-            WriteUserId,
+            EcdhGenerateSharedSecret, EcdsaVerify, EddsaVerify, ExportObject, GetRandom,
+            ImportObject, ReadObject, RsaDecrypt, RsaEncrypt, RsaSign, RsaVerify,
+            VerifySessionUserId, WriteEcKey, WriteRsaKey, WriteSymmKey, WriteUserId,
         },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
-        EcCurve, ObjectId, P1KeyType, RsaEncryptionAlgo, RsaKeyComponent, Se05XResult, SymmKeyType,
+        EcCurve, EcDsaSignatureAlgo, ObjectId, P1KeyType, RsaEncryptionAlgo, RsaKeyComponent,
+        RsaSignatureAlgo, Se05XResult, SymmKeyType,
     },
     t1::I2CForT1,
 };
@@ -1100,7 +1101,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         })?;
 
         let buf = &mut [0; 1024];
-        let id = generate_object_id_ns(rng, ns, ObjectKind::PublicRsaTemporary);
+        let id = generate_object_id_ns(rng, ns, ObjectKind::PublicTemporary);
 
         self.se
             .run_command(
@@ -1151,6 +1152,261 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             .run_command(&DeleteSecureObject { object_id: id }, buf)
             .map_err(|_err| {
                 error_now!("Failed to delete key after encrypt: {_err:?}");
+                Error::FunctionFailed
+            })?;
+        Ok(ret)
+    }
+
+    fn verify<R: CryptoRng + RngCore>(
+        &mut self,
+        req: &request::Verify,
+        core_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+        rng: &mut R,
+    ) -> Result<reply::Verify, Error> {
+        match req.mechanism {
+            Mechanism::P256 => {
+                todo!("Implement P256 without prehashing");
+            }
+            Mechanism::P256Prehashed => self.verify_ecdsa_prehashed(
+                req,
+                Kind::P256,
+                EcCurve::NistP256,
+                EcDsaSignatureAlgo::Sha256,
+                core_keystore,
+                ns,
+                rng,
+            ),
+            Mechanism::Ed255 => self.verify_eddsa(
+                req,
+                Kind::Ed255,
+                EcCurve::IdEccEd25519,
+                core_keystore,
+                ns,
+                rng,
+            ),
+            Mechanism::Rsa2048Pkcs1v15 => self.verify_rsa(
+                req,
+                core_keystore,
+                Kind::Rsa2048,
+                RsaSignatureAlgo::RsaSha256Pkcs1,
+                2048,
+                ns,
+                rng,
+            ),
+            Mechanism::Rsa3072Pkcs1v15 => self.verify_rsa(
+                req,
+                core_keystore,
+                Kind::Rsa3072,
+                RsaSignatureAlgo::RsaSha384Pkcs1,
+                3072,
+                ns,
+                rng,
+            ),
+            Mechanism::Rsa4096Pkcs1v15 => self.verify_rsa(
+                req,
+                core_keystore,
+                Kind::Rsa4096,
+                RsaSignatureAlgo::RsaSha512Pkcs1,
+                4096,
+                ns,
+                rng,
+            ),
+            // We don't support `raw` as it is done through encrypt/decrypt anyway
+            // This is an incompatiblity with trussed-rsa-alloc
+            _ => Err(Error::MechanismParamInvalid),
+        }
+    }
+
+    fn verify_ecdsa_prehashed<R: CryptoRng + RngCore>(
+        &mut self,
+        req: &request::Verify,
+        kind: Kind,
+        curve: EcCurve,
+        algo: EcDsaSignatureAlgo,
+        core_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+        rng: &mut R,
+    ) -> Result<reply::Verify, Error> {
+        let material = core_keystore
+            .load_key(Secrecy::Public, Some(kind), &req.key)
+            .map_err(|err| {
+                debug_now!("Failed to load key for verify: {err:?}");
+                err
+            })?;
+        let buf = &mut [0; 1024];
+        let id = generate_object_id_ns(rng, ns, ObjectKind::PublicTemporary);
+        self.se
+            .run_command(
+                &WriteEcKey::builder()
+                    .curve(curve)
+                    .key_type(P1KeyType::Public)
+                    .object_id(id)
+                    .public_key(&material.material)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error_now!("Failed to write EC public key: {_err:?}");
+                Error::FunctionFailed
+            })?;
+        let res = self
+            .se
+            .run_command(
+                &EcdsaVerify::builder()
+                    .key_id(id)
+                    .algo(algo)
+                    .data(&req.message)
+                    .signature(&req.signature)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error_now!("Failed to verify: {_err:?}");
+                Error::FunctionFailed
+            })?;
+
+        let ret = reply::Verify {
+            valid: res.result == Se05XResult::Success,
+        };
+        self.se
+            .run_command(&DeleteSecureObject { object_id: id }, buf)
+            .map_err(|_err| {
+                error_now!("Failed to delete after verify: {_err:?}");
+                Error::FunctionFailed
+            })?;
+        Ok(ret)
+    }
+
+    fn verify_eddsa<R: CryptoRng + RngCore>(
+        &mut self,
+        req: &request::Verify,
+        kind: Kind,
+        curve: EcCurve,
+        core_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+        rng: &mut R,
+    ) -> Result<reply::Verify, Error> {
+        let material = core_keystore
+            .load_key(Secrecy::Public, Some(kind), &req.key)
+            .map_err(|err| {
+                debug_now!("Failed to load key for verify: {err:?}");
+                err
+            })?;
+        let buf = &mut [0; 1024];
+        let id = generate_object_id_ns(rng, ns, ObjectKind::PublicTemporary);
+        self.se
+            .run_command(
+                &WriteEcKey::builder()
+                    .curve(curve)
+                    .key_type(P1KeyType::Public)
+                    .object_id(id)
+                    .public_key(&material.material)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error_now!("Failed to write EC public key: {_err:?}");
+                Error::FunctionFailed
+            })?;
+        let res = self
+            .se
+            .run_command(
+                &EddsaVerify::builder()
+                    .key_id(id)
+                    .data(&req.message)
+                    .signature(&req.signature)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error_now!("Failed to verify: {_err:?}");
+                Error::FunctionFailed
+            })?;
+
+        let ret = reply::Verify {
+            valid: res.result == Se05XResult::Success,
+        };
+        self.se
+            .run_command(&DeleteSecureObject { object_id: id }, buf)
+            .map_err(|_err| {
+                error_now!("Failed to delete after verify: {_err:?}");
+                Error::FunctionFailed
+            })?;
+        Ok(ret)
+    }
+
+    fn verify_rsa<R: CryptoRng + RngCore>(
+        &mut self,
+        req: &request::Verify,
+        core_keystore: &mut impl Keystore,
+        kind: Kind,
+        algo: RsaSignatureAlgo,
+        size: u16,
+        ns: NamespaceValue,
+        rng: &mut R,
+    ) -> Result<reply::Verify, Error> {
+        let material = core_keystore
+            .load_key(Secrecy::Public, Some(kind), &req.key)
+            .map_err(|err| {
+                debug_now!("Failed to load key for rsa sign: {err:?}");
+                err
+            })?;
+        let parsed = RsaPublicParts::deserialize(&material.material).map_err(|_err| {
+            error_now!("Failed to parse public rsa key data: {_err:?}");
+            Error::CborError
+        })?;
+
+        let buf = &mut [0; 1024];
+        let id = generate_object_id_ns(rng, ns, ObjectKind::PublicTemporary);
+
+        self.se
+            .run_command(
+                &WriteRsaKey::builder()
+                    .key_type(P1KeyType::Public)
+                    .key_size(size.into())
+                    .n(parsed.n)
+                    .object_id(id)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error_now!("Failed to re-import modulus for verify: {_err:?}");
+                Error::FunctionFailed
+            })?;
+        self.se
+            .run_command(
+                &WriteRsaKey::builder().e(parsed.e).object_id(id).build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error_now!("Failed to re-import key for verify: {_err:?}");
+                Error::FunctionFailed
+            })?;
+
+        let res = self
+            .se
+            .run_command(
+                &RsaVerify::builder()
+                    .key_id(id)
+                    .algo(algo)
+                    .data(&req.message)
+                    .signature(&req.signature)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error_now!("Failed to verify: {_err:?}");
+                Error::FunctionFailed
+            })?;
+
+        let ret = reply::Verify {
+            valid: res.result == Se05XResult::Success,
+        };
+        self.se
+            .run_command(&DeleteSecureObject { object_id: id }, buf)
+            .map_err(|_err| {
+                error_now!("Failed to delete key after verify: {_err:?}");
                 Error::FunctionFailed
             })?;
         Ok(ret)
@@ -1512,7 +1768,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Request::Sign(req) if supported(req.mechanism) => todo!(),
             Request::UnsafeInjectKey(req) if supported(req.mechanism) => todo!(),
             Request::UnwrapKey(req) if supported(req.mechanism) => todo!(),
-            Request::Verify(req) if supported(req.mechanism) => todo!(),
+            Request::Verify(req) if supported(req.mechanism) => {
+                self.verify(req, core_keystore, ns, rng)?.into()
+            }
             Request::WrapKey(req) if supported(req.mechanism) => todo!(),
             _ => return Err(Error::RequestNotAvailable),
         })
