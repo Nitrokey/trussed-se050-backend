@@ -9,8 +9,8 @@ use se05x::{
     se05x::{
         commands::{
             CheckObjectExists, CloseSession, CreateSession, DeleteSecureObject,
-            EcdhGenerateSharedSecret, EcdsaVerify, EddsaVerify, ExportObject, GetRandom,
-            ImportObject, ReadObject, RsaDecrypt, RsaEncrypt, RsaSign, RsaVerify,
+            EcdhGenerateSharedSecret, EcdsaSign, EcdsaVerify, EddsaSign, EddsaVerify, ExportObject,
+            GetRandom, ImportObject, ReadObject, RsaDecrypt, RsaEncrypt, RsaSign, RsaVerify,
             VerifySessionUserId, WriteEcKey, WriteRsaKey, WriteSymmKey, WriteUserId,
         },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
@@ -109,7 +109,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         &mut self,
         key: &KeyId,
         ns: NamespaceValue,
-        keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
     ) -> Result<reply::Delete, Error> {
         let (parsed_key, _parsed_ty) = parse_key_id(*key, ns).ok_or_else(|| {
             debug_now!("Failed to parse key id");
@@ -123,10 +123,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 self.delete_persistent_key(obj)
             }
             ParsedObjectId::VolatileKey(VolatileObjectId(obj)) => {
-                self.delete_volatile_key(&key, obj, keystore)
+                self.delete_volatile_key(&key, obj, se050_keystore)
             }
             ParsedObjectId::VolatileRsaKey(obj) => {
-                self.delete_volatile_rsa_key(*key, obj, keystore)
+                self.delete_volatile_rsa_key(*key, obj, se050_keystore)
             }
         }
     }
@@ -146,14 +146,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         &mut self,
         key: &KeyId,
         object_id: ObjectId,
-        keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
     ) -> Result<reply::Delete, Error> {
         let buf = &mut [0; 1024];
-        self.se
-            .run_command(&DeleteSecureObject { object_id }, buf)
-            .or(Err(Error::FunctionFailed))?;
         Ok(reply::Delete {
-            success: keystore.delete_key(key),
+            success: se050_keystore.delete_key(key),
         })
     }
 
@@ -161,7 +158,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         &mut self,
         key: KeyId,
         se_id: VolatileRsaObjectId,
-        keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
     ) -> Result<reply::Delete, Error> {
         let buf = &mut [0; 1024];
 
@@ -271,7 +268,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Error::FunctionFailed
             })?;
         Ok(reply::Delete {
-            success: keystore.delete_key(&key),
+            success: se050_keystore.delete_key(&key),
         })
     }
 
@@ -939,6 +936,20 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             info,
             &shared_secret,
         )?;
+
+        if let ParsedObjectId::VolatileKey(priv_volatile) = priv_parsed_key {
+            self.se
+                .run_command(
+                    &DeleteSecureObject {
+                        object_id: priv_volatile.0,
+                    },
+                    buf,
+                )
+                .map_err(|_err| {
+                    debug_now!("Failed to delete volatile after agree: {_err:?}");
+                    Error::FunctionFailed
+                })?;
+        }
         Ok(reply::Agree {
             shared_secret: key_id,
         })
@@ -1157,6 +1168,266 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(ret)
     }
 
+    fn sign<R: CryptoRng + RngCore>(
+        &mut self,
+        req: &request::Sign,
+        se050_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+        rng: &mut R,
+    ) -> Result<reply::Sign, Error> {
+        match req.mechanism {
+            Mechanism::P256 => {
+                todo!("Implement P256 without prehashing");
+            }
+            Mechanism::P256Prehashed => self.sign_ecdsa(req, se050_keystore, ns),
+            Mechanism::Ed255 => self.sign_eddsa(req, se050_keystore, ns),
+            Mechanism::Rsa2048Pkcs1v15
+            | Mechanism::Rsa3072Pkcs1v15
+            | Mechanism::Rsa4096Pkcs1v15 => self.rsa_sign(req, se050_keystore, ns, rng),
+            // We don't support `raw` as it is done through encrypt/decrypt anyway
+            // This is an incompatiblity with trussed-rsa-alloc
+            _ => Err(Error::MechanismParamInvalid),
+        }
+    }
+
+    fn rsa_sign_volatile<R: CryptoRng + RngCore>(
+        &mut self,
+        key_id: KeyId,
+        object_id: VolatileRsaObjectId,
+        data_to_sign: &[u8],
+        se050_keystore: &mut impl Keystore,
+        algo: RsaSignatureAlgo,
+        kind: Kind,
+        rng: &mut R,
+    ) -> Result<reply::Sign, Error> {
+        let buf = &mut [0; BUFFER_LEN];
+        let data = se050_keystore.load_key(Secrecy::Secret, Some(kind), &key_id)?;
+        let data: VolatileRsaKey = cbor_deserialize(&data.material).or(Err(Error::CborError))?;
+        let session_id = self
+            .se
+            .run_command(
+                &CreateSession {
+                    object_id: object_id.intermediary_key_id(),
+                },
+                buf,
+            )
+            .map_err(|_err| {
+                debug!("Failed to create session");
+                Error::FunctionFailed
+            })?
+            .session_id;
+        self.se
+            .authenticate_aes128_session(session_id, &data.intermediary_key, rng)
+            .map_err(|_err| {
+                debug!("Failed to authenticate session");
+                Error::FunctionFailed
+            })?;
+        let signature = self
+            .se
+            .run_session_command(
+                session_id,
+                &RsaSign {
+                    key_id: object_id.key_id(),
+                    algo,
+                    data: data_to_sign,
+                },
+                buf,
+            )
+            .map_err(|_err| {
+                error_now!("Failed to sign {_err:?}");
+                Error::FunctionFailed
+            })?
+            .signature;
+        self.se
+            .run_session_command(session_id, &CloseSession {}, &mut [0; 128])
+            .map_err(|_err| {
+                error_now!("Failed to decrypt {_err:?}");
+                Error::FunctionFailed
+            })?;
+
+        return Ok(reply::Sign {
+            signature: Bytes::from_slice(signature).map_err(|_err| Error::FunctionFailed)?,
+        });
+    }
+
+    fn rsa_sign_persistent(
+        &mut self,
+        id: PersistentObjectId,
+        data: &[u8],
+        algo: RsaSignatureAlgo,
+    ) -> Result<reply::Sign, Error> {
+        let buf = &mut [0; BUFFER_LEN];
+        let res = self
+            .se
+            .run_command(
+                &RsaSign {
+                    key_id: id.0,
+                    algo,
+                    data,
+                },
+                buf,
+            )
+            .map_err(|_err| {
+                error_now!("Failed to decrypt {_err:?}");
+                Error::FunctionFailed
+            })?;
+        return Ok(reply::Sign {
+            signature: Bytes::from_slice(res.signature).map_err(|_err| Error::FunctionFailed)?,
+        });
+    }
+
+    fn rsa_sign<R: CryptoRng + RngCore>(
+        &mut self,
+        req: &request::Sign,
+        se050_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+        rng: &mut R,
+    ) -> Result<reply::Sign, Error> {
+        let (_bits, kind, _) = bits_and_kind_from_mechanism(req.mechanism)?;
+        let (key_id, key_type) = parse_key_id(req.key, ns).ok_or(Error::RequestNotAvailable)?;
+
+        if !matches!(
+            (key_type, kind),
+            (KeyType::Rsa2048, Kind::Rsa2048)
+                | (KeyType::Rsa3072, Kind::Rsa3072)
+                | (KeyType::Rsa4096, Kind::Rsa4096)
+        ) {
+            return Err(Error::MechanismInvalid);
+        }
+
+        let algo = match kind {
+            Kind::Rsa2048 => RsaSignatureAlgo::RsaSha256Pkcs1,
+            Kind::Rsa3072 => RsaSignatureAlgo::RsaSha384Pkcs1,
+            Kind::Rsa4096 => RsaSignatureAlgo::RsaSha512Pkcs1,
+            _ => unreachable!(),
+        };
+
+        match key_id {
+            ParsedObjectId::VolatileRsaKey(key) => {
+                self.rsa_sign_volatile(req.key, key, &req.message, se050_keystore, algo, kind, rng)
+            }
+            ParsedObjectId::PersistentKey(key) => self.rsa_sign_persistent(key, &req.message, algo),
+            _ => return Err(Error::ObjectHandleInvalid),
+        }
+    }
+
+    fn sign_ecdsa(
+        &mut self,
+        req: &request::Sign,
+        se050_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<reply::Sign, Error> {
+        let (parsed_key, parsed_ty) =
+            parse_key_id(req.key, ns).ok_or(Error::RequestNotAvailable)?;
+
+        let (kind, algo) = match (req.mechanism, parsed_ty) {
+            (Mechanism::P256Prehashed, KeyType::P256) => (Kind::P256, EcDsaSignatureAlgo::Sha256),
+            _ => return Err(Error::WrongKeyKind),
+        };
+
+        if let ParsedObjectId::VolatileKey(key_volatile) = parsed_key {
+            self.reimport_volatile_key(req.key, kind, se050_keystore, key_volatile.0)?;
+        }
+
+        let (ParsedObjectId::VolatileKey(VolatileObjectId(obj))
+        | ParsedObjectId::PersistentKey(PersistentObjectId(obj))) = parsed_key
+        else {
+            return Err(Error::MechanismParamInvalid);
+        };
+
+        let buf = &mut [0; 256];
+        let res = self
+            .se
+            .run_command(
+                &EcdsaSign {
+                    key_id: obj,
+                    algo,
+                    data: &req.message,
+                },
+                buf,
+            )
+            .map_err(|_err| {
+                debug_now!("Failed to perform agree: {_err:?}");
+                Error::FunctionFailed
+            })?;
+
+        let mut signature = Bytes::new();
+        signature.extend_from_slice(res.signature).unwrap();
+
+        if let ParsedObjectId::VolatileKey(volatile) = parsed_key {
+            self.se
+                .run_command(
+                    &DeleteSecureObject {
+                        object_id: volatile.0,
+                    },
+                    buf,
+                )
+                .map_err(|_err| {
+                    debug_now!("Failed to delete volatile after ecdsa sign: {_err:?}");
+                    Error::FunctionFailed
+                })?;
+        }
+        Ok(reply::Sign { signature })
+    }
+
+    fn sign_eddsa(
+        &mut self,
+        req: &request::Sign,
+        se050_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<reply::Sign, Error> {
+        let (parsed_key, parsed_ty) =
+            parse_key_id(req.key, ns).ok_or(Error::RequestNotAvailable)?;
+
+        let kind = match (req.mechanism, parsed_ty) {
+            (Mechanism::P256Prehashed, KeyType::Ed255) => Kind::Ed255,
+            _ => return Err(Error::WrongKeyKind),
+        };
+
+        if let ParsedObjectId::VolatileKey(key_volatile) = parsed_key {
+            self.reimport_volatile_key(req.key, kind, se050_keystore, key_volatile.0)?;
+        }
+
+        let (ParsedObjectId::VolatileKey(VolatileObjectId(obj))
+        | ParsedObjectId::PersistentKey(PersistentObjectId(obj))) = parsed_key
+        else {
+            return Err(Error::MechanismParamInvalid);
+        };
+
+        let buf = &mut [0; 256];
+        let res = self
+            .se
+            .run_command(
+                &EddsaSign {
+                    key_id: obj,
+                    data: &req.message,
+                },
+                buf,
+            )
+            .map_err(|_err| {
+                debug_now!("Failed to perform agree: {_err:?}");
+                Error::FunctionFailed
+            })?;
+
+        let mut signature = Bytes::new();
+        signature.extend_from_slice(res.signature).unwrap();
+
+        if let ParsedObjectId::VolatileKey(volatile) = parsed_key {
+            self.se
+                .run_command(
+                    &DeleteSecureObject {
+                        object_id: volatile.0,
+                    },
+                    buf,
+                )
+                .map_err(|_err| {
+                    debug_now!("Failed to delete volatile after eddsa sign: {_err:?}");
+                    Error::FunctionFailed
+                })?;
+        }
+        Ok(reply::Sign { signature })
+    }
+
     fn verify<R: CryptoRng + RngCore>(
         &mut self,
         req: &request::Verify,
@@ -1166,7 +1437,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     ) -> Result<reply::Verify, Error> {
         match req.mechanism {
             Mechanism::P256 => {
-                todo!("Implement P256 without prehashing");
+                todo!("Implement P256 verification without prehashing");
             }
             Mechanism::P256Prehashed => self.verify_ecdsa_prehashed(
                 req,
@@ -1765,7 +2036,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Request::GenerateKey(req) if supported(req.mechanism) => {
                 self.generate_key(req, se050_keystore, rng, ns)?.into()
             }
-            Request::Sign(req) if supported(req.mechanism) => todo!(),
+            Request::Sign(req) if supported(req.mechanism) => {
+                self.sign(req, se050_keystore, ns, rng)?.into()
+            }
             Request::UnsafeInjectKey(req) if supported(req.mechanism) => todo!(),
             Request::UnwrapKey(req) if supported(req.mechanism) => todo!(),
             Request::Verify(req) if supported(req.mechanism) => {
