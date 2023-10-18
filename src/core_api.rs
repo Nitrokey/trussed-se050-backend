@@ -149,6 +149,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         se050_keystore: &mut impl Keystore,
     ) -> Result<reply::Delete, Error> {
         let buf = &mut [0; 1024];
+        self.se
+            .run_command(&DeleteSecureObject { object_id }, buf)
+            .or(Err(Error::FunctionFailed))?;
         Ok(reply::Delete {
             success: se050_keystore.delete_key(key),
         })
@@ -937,18 +940,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             &shared_secret,
         )?;
 
-        if let ParsedObjectId::VolatileKey(priv_volatile) = priv_parsed_key {
-            self.se
-                .run_command(
-                    &DeleteSecureObject {
-                        object_id: priv_volatile.0,
-                    },
-                    buf,
-                )
-                .map_err(|_err| {
-                    debug_now!("Failed to delete volatile after agree: {_err:?}");
-                    Error::FunctionFailed
-                })?;
+        if let ParsedObjectId::VolatileKey(_) = priv_parsed_key {
+            self.reselect()?;
         }
         Ok(reply::Agree {
             shared_secret: key_id,
@@ -1354,18 +1347,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let mut signature = Bytes::new();
         signature.extend_from_slice(res.signature).unwrap();
 
-        if let ParsedObjectId::VolatileKey(volatile) = parsed_key {
-            self.se
-                .run_command(
-                    &DeleteSecureObject {
-                        object_id: volatile.0,
-                    },
-                    buf,
-                )
-                .map_err(|_err| {
-                    debug_now!("Failed to delete volatile after ecdsa sign: {_err:?}");
-                    Error::FunctionFailed
-                })?;
+        if let ParsedObjectId::VolatileKey(_) = parsed_key {
+            self.reselect()?;
         }
         Ok(reply::Sign { signature })
     }
@@ -1380,7 +1363,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             parse_key_id(req.key, ns).ok_or(Error::RequestNotAvailable)?;
 
         let kind = match (req.mechanism, parsed_ty) {
-            (Mechanism::P256Prehashed, KeyType::Ed255) => Kind::Ed255,
+            (Mechanism::Ed255, KeyType::Ed255) => Kind::Ed255,
             _ => return Err(Error::WrongKeyKind),
         };
 
@@ -1412,18 +1395,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let mut signature = Bytes::new();
         signature.extend_from_slice(res.signature).unwrap();
 
-        if let ParsedObjectId::VolatileKey(volatile) = parsed_key {
-            self.se
-                .run_command(
-                    &DeleteSecureObject {
-                        object_id: volatile.0,
-                    },
-                    buf,
-                )
-                .map_err(|_err| {
-                    debug_now!("Failed to delete volatile after eddsa sign: {_err:?}");
-                    Error::FunctionFailed
-                })?;
+        if let ParsedObjectId::VolatileKey(_) = parsed_key {
+            self.reselect()?;
         }
         Ok(reply::Sign { signature })
     }
@@ -1903,7 +1876,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             | ParsedObjectId::PinWithDerived(_)
             | ParsedObjectId::PersistentKey(_)
             | ParsedObjectId::SaltValue(_) => return Err(Error::ObjectHandleInvalid),
+
+            // We delete the exported data, which can be imported again if unwrapped.
             ParsedObjectId::VolatileKey(_obj_id) => se050_keystore.delete_key(&req.key),
+            // We delete the key that protects the actual RSA private key data, which can be imported again if unwrapped.
             ParsedObjectId::VolatileRsaKey(_obj_id) => se050_keystore.delete_key(&req.key),
         };
         Ok(reply::Clear { success })
