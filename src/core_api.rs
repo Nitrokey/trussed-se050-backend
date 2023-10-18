@@ -173,12 +173,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                debug!("Failed existence check: {_err:?}");
+                debug_now!("Failed existence check: {_err:?}");
                 Error::FunctionFailed
             })?
             .result;
         if exists == Se05XResult::Success {
-            debug!("Deleting key");
+            debug_now!("Deleting key");
             self.se
                 .run_command(
                     &DeleteSecureObject {
@@ -187,16 +187,20 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     buf,
                 )
                 .map_err(|_err| {
-                    debug!("Failed deletion: {_err:?}");
+                    debug_now!("Failed deletion: {_err:?}");
                     Error::FunctionFailed
                 })?;
         }
 
-        debug!("Writing userid ");
+        debug_now!("Writing userid ");
         self.se
             .run_command(
                 &WriteUserId::builder()
                     .object_id(se_id.key_id())
+                    .policy(PolicySet(&[Policy {
+                        object_id: ObjectId::INVALID,
+                        access_rule: ObjectAccessRule::from_flags(ObjectPolicyFlags::ALLOW_DELETE),
+                    }]))
                     .data(&hex!("01020304"))
                     .build(),
                 buf,
@@ -205,7 +209,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 debug!("Failed WriteUserId: {_err:?}");
                 Error::FunctionFailed
             })?;
-        debug!("Creating session");
+        debug_now!("Creating session");
         let session_id = self
             .se
             .run_command(
@@ -219,7 +223,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Error::FunctionFailed
             })?
             .session_id;
-        debug!("Auth session");
+        debug_now!("Auth session");
         self.se
             .run_session_command(
                 session_id,
@@ -229,11 +233,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                debug!("Failed VerifySessionUserId: {_err:?}");
+                debug_now!("Failed VerifySessionUserId: {_err:?}");
                 Error::FunctionFailed
             })?;
 
-        debug!("Deleting auth");
+        debug_now!("Deleting auth");
         self.se
             .run_session_command(
                 session_id,
@@ -243,17 +247,17 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                debug!("Failed to delete auth: {_err:?}");
+                debug_now!("Failed to delete auth: {_err:?}");
                 Error::FunctionFailed
             })?;
-        debug!("Closing sess");
+        debug_now!("Closing sess");
         self.se
             .run_session_command(session_id, &CloseSession {}, buf)
             .map_err(|_err| {
                 debug!("Failed to close session: {_err:?}");
                 Error::FunctionFailed
             })?;
-        debug!("Deleting userid");
+        debug_now!("Deleting userid");
         self.se
             .run_command(
                 &DeleteSecureObject {
@@ -262,7 +266,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                debug!("Failed to delete user id: {_err:?}");
+                debug_now!("Failed to delete user id: {_err:?}");
                 Error::FunctionFailed
             })?;
         Ok(reply::Delete {
@@ -299,9 +303,15 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 rng,
                 ns,
             ),
-            ParsedObjectId::VolatileRsaKey(k) => {
-                self.derive_volatile_rsa_key(req, k, parsed_ty, se050_keystore, ns, rng)
-            }
+            ParsedObjectId::VolatileRsaKey(k) => self.derive_volatile_rsa_key(
+                req,
+                k,
+                parsed_ty,
+                core_keystore,
+                se050_keystore,
+                ns,
+                rng,
+            ),
         }
     }
 
@@ -496,6 +506,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         req: &request::DeriveKey,
         key: VolatileRsaObjectId,
         ty: KeyType,
+        core_keystore: &mut impl Keystore,
         se050_keystore: &mut impl Keystore,
         ns: NamespaceValue,
         rng: &mut R,
@@ -570,7 +581,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         }
         .serialize()
         .unwrap();
-        let key = se050_keystore.store_key(
+        let key = core_keystore.store_key(
             req.attributes.persistence,
             Secrecy::Public,
             kind,
@@ -1077,7 +1088,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Mechanism::Rsa4096Raw => (Kind::Rsa4096, RsaEncryptionAlgo::NoPad, 4096),
             _ => return Err(Error::MechanismInvalid),
         };
-        let material = core_keystore.load_key(Secrecy::Public, Some(kind), &req.key)?;
+        let material = core_keystore
+            .load_key(Secrecy::Public, Some(kind), &req.key)
+            .map_err(|err| {
+                debug_now!("Failed to load key for decrypt: {err:?}");
+                err
+            })?;
         let parsed = RsaPublicParts::deserialize(&material.material).map_err(|_err| {
             error_now!("Failed to parse volatile rsa key data: {_err:?}");
             Error::CborError
