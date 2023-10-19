@@ -2175,11 +2175,15 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 self.sign(req, se050_keystore, ns, rng)?.into()
             }
             Request::UnsafeInjectKey(req) if supported(req.mechanism) => todo!(),
-            Request::UnwrapKey(req) => todo!(),
+            Request::UnwrapKey(req) => self
+                .unwrap_key(req, core_keystore, se050_keystore, ns)?
+                .into(),
             Request::Verify(req) if supported(req.mechanism) => {
                 self.verify(req, core_keystore, ns, rng)?.into()
             }
-            Request::WrapKey(req) => todo!(),
+            Request::WrapKey(req) => self
+                .wrap_key(req, core_keystore, se050_keystore, ns)?
+                .into(),
             _ => return Err(Error::RequestNotAvailable),
         })
     }
