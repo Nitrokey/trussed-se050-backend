@@ -10,12 +10,12 @@ use se05x::{
         commands::{
             CheckObjectExists, CloseSession, CreateSession, DeleteSecureObject,
             EcdhGenerateSharedSecret, EcdsaSign, EcdsaVerify, EddsaSign, EddsaVerify, ExportObject,
-            GetRandom, ImportObject, ReadObject, RsaDecrypt, RsaEncrypt, RsaSign, RsaVerify,
-            VerifySessionUserId, WriteEcKey, WriteRsaKey, WriteSymmKey, WriteUserId,
+            GetRandom, ImportObject, ReadIdList, ReadObject, RsaDecrypt, RsaEncrypt, RsaSign,
+            RsaVerify, VerifySessionUserId, WriteEcKey, WriteRsaKey, WriteSymmKey, WriteUserId,
         },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
         EcCurve, EcDsaSignatureAlgo, ObjectId, P1KeyType, RsaEncryptionAlgo, RsaKeyComponent,
-        RsaSignatureAlgo, Se05XResult, SymmKeyType,
+        RsaSignatureAlgo, Se05XResult, SecureObjectFilter, SymmKeyType,
     },
     t1::I2CForT1,
 };
@@ -36,7 +36,7 @@ use crate::{
         generate_object_id_ns, key_id_for_obj, parse_key_id, KeyType, NamespaceValue, ObjectKind,
         ParsedObjectId, PersistentObjectId, Privacy, VolatileObjectId, VolatileRsaObjectId,
     },
-    Context, Se050Backend, BACKEND_DIR,
+    object_in_range, Context, Se050Backend, BACKEND_DIR,
 };
 
 const BUFFER_LEN: usize = 2048;
@@ -172,12 +172,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         })
     }
 
-    fn delete_volatile_rsa_key(
+    fn delete_volatile_rsa_key_on_se050(
         &mut self,
-        key: KeyId,
         se_id: VolatileRsaObjectId,
-        se050_keystore: &mut impl Keystore,
-    ) -> Result<reply::Delete, Error> {
+    ) -> Result<u16, Error> {
+        let mut count = 0;
         let buf = &mut [0; 1024];
 
         let exists = self
@@ -193,7 +192,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Error::FunctionFailed
             })?
             .result;
-        if exists == Se05XResult::Success {
+        if exists.is_success() {
             debug_now!("Deleting key");
             self.se
                 .run_command(
@@ -206,6 +205,24 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     debug_now!("Failed deletion: {_err:?}");
                     Error::FunctionFailed
                 })?;
+            count += 1;
+        }
+        if !self
+            .se
+            .run_command(
+                &CheckObjectExists {
+                    object_id: se_id.intermediary_key_id(),
+                },
+                buf,
+            )
+            .map_err(|_err| {
+                debug_now!("Failed existence check: {_err:?}");
+                Error::FunctionFailed
+            })?
+            .result
+            .is_success()
+        {
+            return Ok(count);
         }
 
         debug_now!("Writing userid ");
@@ -285,6 +302,16 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 debug_now!("Failed to delete user id: {_err:?}");
                 Error::FunctionFailed
             })?;
+        return Ok(count + 1);
+    }
+
+    fn delete_volatile_rsa_key(
+        &mut self,
+        key: KeyId,
+        se_id: VolatileRsaObjectId,
+        se050_keystore: &mut impl Keystore,
+    ) -> Result<reply::Delete, Error> {
+        self.delete_volatile_rsa_key_on_se050(se_id)?;
         Ok(reply::Delete {
             success: se050_keystore.delete_key(&key),
         })
@@ -2117,6 +2144,120 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             }
         };
         Ok(reply::Exists { exists })
+    }
+
+    /// Returns the number of objects deleted.
+    /// But the count must only be increased by 1
+    fn delete_single_key_from_id(
+        &mut self,
+        req: &request::DeleteAllKeys,
+        object_id: ObjectId,
+    ) -> Result<usize, Error> {
+        todo!()
+    }
+
+    fn delete_single_key_from_second_pass(
+        &mut self,
+        req: &request::DeleteAllKeys,
+        object_id: ObjectId,
+    ) -> Result<usize, Error> {
+        todo!()
+    }
+
+    fn delete_all_keys(
+        &mut self,
+        req: &request::DeleteAllKeys,
+        core_keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<reply::DeleteAllKeys, Error> {
+        let core_count = core_keystore.delete_all(req.location)?;
+        se050_keystore.delete_all(req.location)?;
+
+        let buf = &mut [0; 1024];
+        let buf2 = &mut [0; 128];
+        let mut count = 0;
+        let mut offset = 0;
+        loop {
+            let to_delete = self
+                .se
+                .run_command(
+                    &ReadIdList {
+                        offset: (offset - count).into(),
+                        filter: SecureObjectFilter::All,
+                    },
+                    buf,
+                )
+                .map_err(|_err| {
+                    error_now!("Failed to read id_list: {_err:?}");
+                    Error::FunctionFailed
+                })?;
+
+            assert_eq!(to_delete.ids.len() % 4, 0);
+            offset += (to_delete.ids.len() / 4) as u16;
+            for obj_slice in to_delete.ids.chunks_exact(4) {
+                let obj = ObjectId(obj_slice.try_into().unwrap());
+                if !object_in_range(obj) {
+                    count += 1;
+                    continue;
+                }
+                let Some((ns_to_check, parsed_obj_id)) = ParsedObjectId::parse(obj) else {
+                    debug_now!("Failed to parse object id");
+                    continue;
+                };
+                if ns_to_check != ns {
+                    continue;
+                }
+                match (req.location, parsed_obj_id) {
+                    (
+                        Location::Internal | Location::External,
+                        ParsedObjectId::PersistentKey(obj),
+                    ) => {
+                        count += 1;
+                        offset -= 1;
+                        self.se
+                            .run_command(&DeleteSecureObject { object_id: obj.0 }, buf2)
+                            .map_err(|_err| {
+                                error_now!("Failed to delete object: {obj:02x?} {_err:?}");
+                                Error::FunctionFailed
+                            })?;
+                    }
+                    (Location::Volatile, ParsedObjectId::VolatileKey(obj)) => {
+                        count += 1;
+                        offset -= 1;
+                        self.se
+                            .run_command(&DeleteSecureObject { object_id: obj.0 }, buf2)
+                            .map_err(|_err| {
+                                error_now!("Failed to delete object: {obj:02x?} {_err:?}");
+                                Error::FunctionFailed
+                            })?;
+                    }
+                    (Location::Volatile, ParsedObjectId::VolatileRsaKey(obj)) => {
+                        count += 1;
+                        offset -= self.delete_volatile_rsa_key_on_se050(obj)?;
+                    }
+                    (
+                        _,
+                        ParsedObjectId::Pin(_)
+                        | ParsedObjectId::PinWithDerived(_)
+                        | ParsedObjectId::SaltValue(_),
+                    ) => {}
+                    (
+                        Location::Internal | Location::External,
+                        ParsedObjectId::VolatileKey(_) | ParsedObjectId::VolatileRsaKey(_),
+                    ) => {}
+                    (Location::Volatile, ParsedObjectId::PersistentKey(_)) => {}
+                }
+            }
+
+            if !to_delete.more.is_more() {
+                break;
+            }
+        }
+
+        return Ok(reply::DeleteAllKeys {
+            count: count.into(),
+        });
     }
 }
 

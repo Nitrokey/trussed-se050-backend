@@ -155,3 +155,6 @@ pub struct ContextNs<'a> {
 }
 
 const ID_RANGE: Range<u32> = 0x000000FF..0x7FFF0000;
+pub(crate) fn object_in_range(obj: ObjectId) -> bool {
+    ID_RANGE.contains(&u32::from_be_bytes(obj.0))
+}

@@ -291,7 +291,7 @@ enum_from!(
 );
 
 impl ParsedObjectId {
-    fn parse(id: ObjectId) -> Option<(NamespaceValue, ParsedObjectId)> {
+    pub(crate) fn parse(id: ObjectId) -> Option<(NamespaceValue, ParsedObjectId)> {
         let (ns, kind) = parse_namespace(id.0[3])?;
         let parsed = match kind {
             ObjectKind::Reserved => return None,
