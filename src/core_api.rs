@@ -63,6 +63,21 @@ struct VolatileRsaKey {
     intermediary_key: [u8; 16],
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+enum WrappedKeyType {
+    Volatile,
+    VolatileRsa,
+}
+
+/// Can either be a raw wrapped key or a wrapped key
+///
+/// If this is a raw wrapped key, `is_se050` is not included and therefore deserializes to `false`
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct WrappedKeyData {
+    encrypted_data: reply::Encrypt,
+    ty: WrappedKeyType,
+}
+
 /// The bool returned points at wether the mechanism is raw RSA
 fn bits_and_kind_from_mechanism(mechanism: Mechanism) -> Result<(usize, key::Kind, bool), Error> {
     match mechanism {
@@ -1884,6 +1899,61 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         };
         Ok(reply::Clear { success })
     }
+
+    fn wrap_key(
+        &mut self,
+        req: &request::WrapKey,
+        core_keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<reply::WrapKey, Error> {
+        if !matches!(req.mechanism, Mechanism::Chacha8Poly1305) {
+            return Err(Error::RequestNotAvailable);
+        }
+        let (parsed_key, _parsed_ty) = parse_key_id(req.key, ns).ok_or_else(|| {
+            debug_now!("Failed to parse key id");
+            // Let non-se050 keys be wrapped by the core backend
+            Error::RequestNotAvailable
+        })?;
+
+        let ty = match parsed_key {
+            ParsedObjectId::VolatileKey(_) => WrappedKeyType::Volatile,
+            ParsedObjectId::VolatileRsaKey(_) => WrappedKeyType::VolatileRsa,
+            _ => {
+                debug_now!("Wrapping non-volatile key");
+                return Err(Error::ObjectHandleInvalid);
+            }
+        };
+        debug!("trussed: Chacha8Poly1305::WrapKey");
+
+        let serialized_key = se050_keystore.load_key(key::Secrecy::Secret, None, &req.key)?;
+
+        let message = Message::from_slice(&serialized_key.serialize()).unwrap();
+
+        let encryption_request = request::Encrypt {
+            mechanism: Mechanism::Chacha8Poly1305,
+            key: req.wrapping_key,
+            message,
+            associated_data: req.associated_data.clone(),
+            nonce: None,
+        };
+        let encrypted_data =
+            <trussed::mechanisms::Chacha8Poly1305 as trussed::service::Encrypt>::encrypt(
+                core_keystore,
+                &encryption_request,
+            )?;
+
+        let mut wrapped_key: Bytes<1024> = postcard::to_vec(&WrappedKeyData { encrypted_data, ty })
+            .map_err(|_| Error::CborError)?
+            .into();
+
+        // We add a 0 to distinguish between a key wrapped by core and a key wrapped by the se050 backend.
+        // Keys wrapped by core start with 0 if and only the ciphertext is empty, but this cannot happen given how the key data is serialized to form the plaintext.
+        wrapped_key.push(0).map_err(|_| Error::CborError)?;
+        wrapped_key.rotate_right(1);
+
+        Ok(reply::WrapKey { wrapped_key })
+    }
 }
 
 const POLICY: PolicySet<'static> = PolicySet(&[Policy {
@@ -2016,11 +2086,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 self.sign(req, se050_keystore, ns, rng)?.into()
             }
             Request::UnsafeInjectKey(req) if supported(req.mechanism) => todo!(),
-            Request::UnwrapKey(req) if supported(req.mechanism) => todo!(),
+            Request::UnwrapKey(req) => todo!(),
             Request::Verify(req) if supported(req.mechanism) => {
                 self.verify(req, core_keystore, ns, rng)?.into()
             }
-            Request::WrapKey(req) if supported(req.mechanism) => todo!(),
+            Request::WrapKey(req) => todo!(),
             _ => return Err(Error::RequestNotAvailable),
         })
     }
