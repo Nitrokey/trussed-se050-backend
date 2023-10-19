@@ -1954,6 +1954,95 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
         Ok(reply::WrapKey { wrapped_key })
     }
+
+    fn unwrap_key(
+        &mut self,
+        req: &request::UnwrapKey,
+        core_keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<reply::UnwrapKey, Error> {
+        if !matches!(req.mechanism, Mechanism::Chacha8Poly1305)
+            || req.wrapped_key.get(0) != Some(&0)
+        {
+            return Err(Error::RequestNotAvailable);
+        }
+        if !matches!(req.attributes.persistence, Location::Volatile) {
+            return Err(Error::FunctionNotSupported);
+        }
+
+        let WrappedKeyData {
+            encrypted_data:
+                reply::Encrypt {
+                    ciphertext,
+                    nonce,
+                    tag,
+                },
+            ty,
+        } = postcard::from_bytes(&req.wrapped_key[1..]).map_err(|_| Error::CborError)?;
+
+        let decryption_request = request::Decrypt {
+            mechanism: Mechanism::Chacha8Poly1305,
+            key: req.wrapping_key,
+            message: ciphertext,
+            associated_data: req.associated_data.clone(),
+            nonce,
+            tag,
+        };
+
+        let serialized_key = if let Some(serialized_key) =
+            <trussed::mechanisms::Chacha8Poly1305 as trussed::service::Decrypt>::decrypt(
+                core_keystore,
+                &decryption_request,
+            )?
+            .plaintext
+        {
+            serialized_key
+        } else {
+            return Ok(reply::UnwrapKey { key: None });
+        };
+
+        // TODO: probably change this to returning Option<key> too
+        let key::Key {
+            flags: _,
+            kind,
+            material,
+        } = key::Key::try_deserialize(&serialized_key)?;
+
+        let key_ty = match kind {
+            Kind::Rsa2048 => KeyType::Rsa2048,
+            Kind::Rsa3072 => KeyType::Rsa3072,
+            Kind::Rsa4096 => KeyType::Rsa4096,
+            Kind::Ed255 => KeyType::Ed255,
+            Kind::X255 => KeyType::X255,
+            Kind::P256 => KeyType::P256,
+            _ => return Err(Error::FunctionFailed),
+        };
+
+        let key_id = match ty {
+            WrappedKeyType::Volatile => {
+                let mat: VolatileKeyMaterialRef =
+                    trussed::cbor_deserialize(&material).map_err(|_err| Error::CborError)?;
+                key_id_for_obj(mat.object_id.0, key_ty)
+            }
+            WrappedKeyType::VolatileRsa => {
+                let mat: VolatileRsaKey =
+                    trussed::cbor_deserialize(&material).map_err(|_err| Error::CborError)?;
+                key_id_for_obj(mat.key_id.0, key_ty)
+            }
+        };
+
+        se050_keystore.overwrite_key(
+            Location::Volatile,
+            // using for signing keys... we need to know
+            key::Secrecy::Secret,
+            kind,
+            &key_id,
+            &material,
+        )?;
+
+        Ok(reply::UnwrapKey { key: Some(key_id) })
+    }
 }
 
 const POLICY: PolicySet<'static> = PolicySet(&[Policy {
