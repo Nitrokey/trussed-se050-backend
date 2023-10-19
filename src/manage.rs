@@ -1,6 +1,6 @@
 use embedded_hal::blocking::delay::DelayUs;
 use hex_literal::hex;
-use littlefs2::{fs::DirEntry, path, path::Path};
+use littlefs2::{path, path::Path};
 use se05x::{
     se05x::{
         commands::{
@@ -216,15 +216,15 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
 
                 let platform = resources.platform();
                 let store = platform.store();
-                let ifs = &*store.ifs();
-                let efs = &*store.efs();
-                let vfs = &*store.vfs();
+                let ifs = store.ifs();
+                let efs = store.efs();
+                let vfs = store.vfs();
                 ifs.remove_dir_all_where(path!("/"), &|f| {
                     let file_name = f.file_name();
                     if PATHS_TO_SAVE.contains(&file_name) {
                         return false;
                     }
-                    return true;
+                    true
                 })
                 .map_err(|_err| {
                     debug_now!("Failed to delete ifs: {_err:?}");

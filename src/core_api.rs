@@ -34,7 +34,7 @@ use trussed_rsa_alloc::RsaPublicParts;
 use crate::{
     namespacing::{
         generate_object_id_ns, key_id_for_obj, parse_key_id, KeyType, NamespaceValue, ObjectKind,
-        ParsedObjectId, PersistentObjectId, Privacy, VolatileObjectId, VolatileRsaObjectId,
+        ParsedObjectId, PersistentObjectId, VolatileObjectId, VolatileRsaObjectId,
     },
     object_in_range, Context, Se050Backend, BACKEND_DIR,
 };
@@ -133,12 +133,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         match parsed_key {
             ParsedObjectId::Pin(_)
             | ParsedObjectId::PinWithDerived(_)
-            | ParsedObjectId::SaltValue(_) => return Err(Error::ObjectHandleInvalid),
+            | ParsedObjectId::SaltValue(_) => Err(Error::ObjectHandleInvalid),
             ParsedObjectId::PersistentKey(PersistentObjectId(obj)) => {
                 self.delete_persistent_key(obj)
             }
             ParsedObjectId::VolatileKey(VolatileObjectId(obj)) => {
-                self.delete_volatile_key(&key, obj, se050_keystore)
+                self.delete_volatile_key(key, obj, se050_keystore)
             }
             ParsedObjectId::VolatileRsaKey(obj) => {
                 self.delete_volatile_rsa_key(*key, obj, se050_keystore)
@@ -302,7 +302,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 debug_now!("Failed to delete user id: {_err:?}");
                 Error::FunctionFailed
             })?;
-        return Ok(count + 1);
+        Ok(count + 1)
     }
 
     fn delete_volatile_rsa_key(
@@ -333,19 +333,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         match parsed_key {
             ParsedObjectId::Pin(_)
             | ParsedObjectId::PinWithDerived(_)
-            | ParsedObjectId::SaltValue(_) => return Err(Error::MechanismParamInvalid),
+            | ParsedObjectId::SaltValue(_) => Err(Error::MechanismParamInvalid),
             ParsedObjectId::PersistentKey(k) => {
-                self.derive_raw_key(req, k.0, core_keystore, parsed_ty, rng, ns)
+                self.derive_raw_key(req, k.0, core_keystore, parsed_ty, ns)
             }
-            ParsedObjectId::VolatileKey(k) => self.derive_volatile_key(
-                req,
-                k.0,
-                parsed_ty,
-                core_keystore,
-                se050_keystore,
-                rng,
-                ns,
-            ),
+            ParsedObjectId::VolatileKey(k) => {
+                self.derive_volatile_key(req, k.0, parsed_ty, core_keystore, se050_keystore, ns)
+            }
             ParsedObjectId::VolatileRsaKey(k) => self.derive_volatile_rsa_key(
                 req,
                 k,
@@ -388,14 +382,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(())
     }
 
-    fn derive_volatile_key<R: CryptoRng + RngCore>(
+    fn derive_volatile_key(
         &mut self,
         req: &request::DeriveKey,
         key: ObjectId,
         ty: KeyType,
         core_keystore: &mut impl Keystore,
         se050_keystore: &mut impl Keystore,
-        rng: &mut R,
         ns: NamespaceValue,
     ) -> Result<reply::DeriveKey, Error> {
         let kind = match ty {
@@ -407,18 +400,17 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             }
         };
         self.reimport_volatile_key(req.base_key, kind, se050_keystore, key)?;
-        let res = self.derive_raw_key(req, key, core_keystore, ty, rng, ns)?;
+        let res = self.derive_raw_key(req, key, core_keystore, ty, ns)?;
         self.reselect()?;
         Ok(res)
     }
 
-    fn derive_raw_key<R: CryptoRng + RngCore>(
+    fn derive_raw_key(
         &mut self,
         req: &request::DeriveKey,
         key: ObjectId,
         core_keystore: &mut impl Keystore,
         ty: KeyType,
-        rng: &mut R,
         ns: NamespaceValue,
     ) -> Result<reply::DeriveKey, Error> {
         let buf = &mut [0; 1024];
@@ -480,7 +472,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Ok(reply::DeriveKey { key: result })
             }
             KeyType::Rsa2048 | KeyType::Rsa3072 | KeyType::Rsa4096 => {
-                return self.derive_rsa_key(req, key, ty, core_keystore, ns);
+                self.derive_rsa_key(req, key, ty, core_keystore, ns)
             }
         }
     }
@@ -491,7 +483,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         key: ObjectId,
         ty: KeyType,
         core_keystore: &mut impl Keystore,
-        ns: NamespaceValue,
+        _ns: NamespaceValue,
     ) -> Result<reply::DeriveKey, Error> {
         let kind = match ty {
             KeyType::Rsa2048 => Kind::Rsa2048,
@@ -551,7 +543,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         ty: KeyType,
         core_keystore: &mut impl Keystore,
         se050_keystore: &mut impl Keystore,
-        ns: NamespaceValue,
+        _ns: NamespaceValue,
         rng: &mut R,
     ) -> Result<reply::DeriveKey, Error> {
         let kind = match ty {
@@ -637,7 +629,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Error::FunctionFailed
             })?;
 
-        return Ok(reply::DeriveKey { key });
+        Ok(reply::DeriveKey { key })
     }
 
     fn generate_key<R: CryptoRng + RngCore>(
@@ -979,7 +971,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             req.attributes.persistence,
             key::Secrecy::Secret,
             info,
-            &shared_secret,
+            shared_secret,
         )?;
 
         if let ParsedObjectId::VolatileKey(_) = priv_parsed_key {
@@ -1045,9 +1037,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Error::FunctionFailed
             })?;
 
-        return Ok(reply::Decrypt {
+        Ok(reply::Decrypt {
             plaintext: Some(Bytes::from_slice(plaintext).map_err(|_err| Error::FunctionFailed)?),
-        });
+        })
     }
 
     fn rsa_decrypt_persistent(
@@ -1071,11 +1063,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 error_now!("Failed to decrypt {_err:?}");
                 Error::FunctionFailed
             })?;
-        return Ok(reply::Decrypt {
+        Ok(reply::Decrypt {
             plaintext: Some(
                 Bytes::from_slice(res.plaintext).map_err(|_err| Error::FunctionFailed)?,
             ),
-        });
+        })
     }
 
     fn decrypt<R: CryptoRng + RngCore>(
@@ -1115,7 +1107,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             ParsedObjectId::PersistentKey(key) => {
                 self.rsa_decrypt_persistent(key, &req.message, algo)
             }
-            _ => return Err(Error::ObjectHandleInvalid),
+            _ => Err(Error::ObjectHandleInvalid),
         }
     }
 
@@ -1280,9 +1272,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Error::FunctionFailed
             })?;
 
-        return Ok(reply::Sign {
+        Ok(reply::Sign {
             signature: Bytes::from_slice(signature).map_err(|_err| Error::FunctionFailed)?,
-        });
+        })
     }
 
     fn rsa_sign_persistent(
@@ -1306,9 +1298,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 error_now!("Failed to decrypt {_err:?}");
                 Error::FunctionFailed
             })?;
-        return Ok(reply::Sign {
+        Ok(reply::Sign {
             signature: Bytes::from_slice(res.signature).map_err(|_err| Error::FunctionFailed)?,
-        });
+        })
     }
 
     fn rsa_sign<R: CryptoRng + RngCore>(
@@ -1342,7 +1334,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 self.rsa_sign_volatile(req.key, key, &req.message, se050_keystore, algo, kind, rng)
             }
             ParsedObjectId::PersistentKey(key) => self.rsa_sign_persistent(key, &req.message, algo),
-            _ => return Err(Error::ObjectHandleInvalid),
+            _ => Err(Error::ObjectHandleInvalid),
         }
     }
 
@@ -1987,10 +1979,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         req: &request::UnwrapKey,
         core_keystore: &mut impl Keystore,
         se050_keystore: &mut impl Keystore,
-        ns: NamespaceValue,
+        _ns: NamespaceValue,
     ) -> Result<reply::UnwrapKey, Error> {
         if !matches!(req.mechanism, Mechanism::Chacha8Poly1305)
-            || req.wrapped_key.get(0) != Some(&0)
+            || req.wrapped_key.first() != Some(&0)
         {
             return Err(Error::RequestNotAvailable);
         }
@@ -2146,24 +2138,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(reply::Exists { exists })
     }
 
-    /// Returns the number of objects deleted.
-    /// But the count must only be increased by 1
-    fn delete_single_key_from_id(
-        &mut self,
-        req: &request::DeleteAllKeys,
-        object_id: ObjectId,
-    ) -> Result<usize, Error> {
-        todo!()
-    }
-
-    fn delete_single_key_from_second_pass(
-        &mut self,
-        req: &request::DeleteAllKeys,
-        object_id: ObjectId,
-    ) -> Result<usize, Error> {
-        todo!()
-    }
-
     fn delete_all_keys(
         &mut self,
         req: &request::DeleteAllKeys,
@@ -2171,7 +2145,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         se050_keystore: &mut impl Keystore,
         ns: NamespaceValue,
     ) -> Result<reply::DeleteAllKeys, Error> {
-        let core_count = core_keystore.delete_all(req.location)?;
+        let _core_count = core_keystore.delete_all(req.location)?;
         se050_keystore.delete_all(req.location)?;
 
         let buf = &mut [0; 1024];
@@ -2255,9 +2229,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             }
         }
 
-        return Ok(reply::DeleteAllKeys {
+        Ok(reply::DeleteAllKeys {
             count: count.into(),
-        });
+        })
     }
 }
 
@@ -2382,7 +2356,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 self.delete(key, ns, se050_keystore)?.into()
             }
             Request::Clear(req) => self.clear(req, se050_keystore, ns)?.into(),
-            Request::DeleteAllKeys(_req) => todo!(),
+            Request::DeleteAllKeys(req) => self
+                .delete_all_keys(req, core_keystore, se050_keystore, ns)?
+                .into(),
             Request::Exists(req) if supported(req.mechanism) => {
                 self.exists(req, se050_keystore, ns)?.into()
             }
