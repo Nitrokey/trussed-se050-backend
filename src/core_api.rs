@@ -2043,6 +2043,81 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
         Ok(reply::UnwrapKey { key: Some(key_id) })
     }
+
+    fn exists(
+        &mut self,
+        req: &request::Exists,
+        se050_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<reply::Exists, Error> {
+        let (parsed_key, parsed_ty) = parse_key_id(req.key, ns).ok_or_else(|| {
+            debug_now!("Failed to parse key id");
+            // Let non-se050 keys be checked by the core backend
+            Error::RequestNotAvailable
+        })?;
+        let buf = &mut [0; 128];
+
+        let kind = parsed_ty.kind();
+
+        let exists = match parsed_key {
+            ParsedObjectId::Pin(_)
+            | ParsedObjectId::PinWithDerived(_)
+            | ParsedObjectId::SaltValue(_) => false,
+            ParsedObjectId::PersistentKey(key) => self
+                .se
+                .run_command(&CheckObjectExists { object_id: key.0 }, buf)
+                .map_err(|_err| {
+                    error_now!("Failed to check existence: {_err:?}");
+                    Error::FunctionFailed
+                })?
+                .result
+                .is_success(),
+            ParsedObjectId::VolatileKey(key) => {
+                !se050_keystore.exists_key(Secrecy::Secret, Some(kind), &req.key)
+                    && self
+                        .se
+                        .run_command(&CheckObjectExists { object_id: key.0 }, buf)
+                        .map_err(|_err| {
+                            error_now!("Failed to check existence: {_err:?}");
+                            Error::FunctionFailed
+                        })?
+                        .result
+                        .is_success()
+            }
+            ParsedObjectId::VolatileRsaKey(key) => {
+                !se050_keystore.exists_key(Secrecy::Secret, Some(kind), &req.key)
+                    && self
+                        .se
+                        .run_command(
+                            &CheckObjectExists {
+                                object_id: key.key_id(),
+                            },
+                            buf,
+                        )
+                        .map_err(|_err| {
+                            error_now!("Failed to check existence: {_err:?}");
+                            Error::FunctionFailed
+                        })?
+                        .result
+                        .is_success()
+                    && self
+                        .se
+                        .run_command(
+                            &CheckObjectExists {
+                                object_id: key.intermediary_key_id(),
+                            },
+                            buf,
+                        )
+                        .map_err(|_err| {
+                            error_now!("Failed to check existence: {_err:?}");
+                            Error::FunctionFailed
+                        })?
+                        .result
+                        .is_success()
+            }
+        };
+        Ok(reply::Exists { exists })
+    }
 }
 
 const POLICY: PolicySet<'static> = PolicySet(&[Policy {
@@ -2167,7 +2242,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             }
             Request::Clear(req) => self.clear(req, se050_keystore, ns)?.into(),
             Request::DeleteAllKeys(_req) => todo!(),
-            Request::Exists(req) if supported(req.mechanism) => todo!(),
+            Request::Exists(req) if supported(req.mechanism) => {
+                self.exists(req, se050_keystore, ns)?.into()
+            }
             Request::GenerateKey(req) if supported(req.mechanism) => {
                 self.generate_key(req, se050_keystore, rng, ns)?.into()
             }

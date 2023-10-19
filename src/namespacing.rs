@@ -3,7 +3,7 @@ use littlefs2::path::Path;
 use rand::{CryptoRng, Rng, RngCore};
 use se05x::se05x::ObjectId;
 use serde::{Deserialize, Serialize};
-use trussed::types::KeyId;
+use trussed::{key::Kind, types::KeyId};
 
 use crate::ID_RANGE;
 
@@ -344,6 +344,19 @@ enum_number! {
         Rsa2048 = 0x4,
         Rsa3072 = 0x5,
         Rsa4096 = 0x6,
+    }
+}
+
+impl KeyType {
+    pub fn kind(&self) -> Kind {
+        match self {
+            Self::Ed255 => Kind::Ed255,
+            Self::X255 => Kind::X255,
+            Self::P256 => Kind::P256,
+            Self::Rsa2048 => Kind::Rsa2048,
+            Self::Rsa3072 => Kind::Rsa3072,
+            Self::Rsa4096 => Kind::Rsa4096,
+        }
     }
 }
 
