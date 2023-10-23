@@ -2,10 +2,7 @@
 
 use cbor_smol::{cbor_deserialize, cbor_serialize};
 use crypto_bigint::{
-    modular::{
-        runtime_mod::{DynResidue, DynResidueParams},
-        Retrieve,
-    },
+    modular::runtime_mod::{DynResidue, DynResidueParams},
     subtle::CtOption,
     Checked, CtChoice, Encoding, U4096,
 };
@@ -2310,6 +2307,134 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         })
     }
 
+    fn unsafe_inject_volatile_rsa<R: CryptoRng + RngCore>(
+        &mut self,
+        req: &request::UnsafeInjectKey,
+        se050_keystore: &mut impl Keystore,
+        size: u16,
+        kind: Kind,
+        ty: KeyType,
+        rng: &mut R,
+        ns: NamespaceValue,
+    ) -> Result<reply::UnsafeInjectKey, Error> {
+        assert!(matches!(
+            kind,
+            Kind::Rsa2048 | Kind::Rsa3072 | Kind::Rsa4096
+        ));
+        let buf = &mut [0; 1024];
+        let se_id = VolatileRsaObjectId::new(rng, ns);
+        fn policy_for_intermediary(real_key: ObjectId) -> [Policy; 1] {
+            [Policy {
+                object_id: real_key,
+                access_rule: ObjectAccessRule::from_flags(ObjectPolicyFlags::ALLOW_DELETE),
+            }]
+        }
+        fn policy_for_key(intermediary: ObjectId) -> [Policy; 2] {
+            [
+                Policy {
+                    object_id: intermediary,
+                    access_rule: ObjectAccessRule::from_flags(
+                        ObjectPolicyFlags::ALLOW_SIGN
+                            | ObjectPolicyFlags::ALLOW_VERIFY
+                            | ObjectPolicyFlags::ALLOW_DEC
+                            | ObjectPolicyFlags::ALLOW_ENC
+                            | ObjectPolicyFlags::ALLOW_READ
+                            | ObjectPolicyFlags::ALLOW_DELETE,
+                    ),
+                },
+                Policy {
+                    object_id: ObjectId::INVALID,
+                    access_rule: ObjectAccessRule::from_flags(
+                        ObjectPolicyFlags::ALLOW_DELETE | ObjectPolicyFlags::ALLOW_READ,
+                    ),
+                },
+            ]
+        }
+        let key: [u8; 16] = self
+            .se
+            .run_command(&GetRandom { length: 16.into() }, buf)
+            .or(Err(Error::FunctionFailed))?
+            .data
+            .try_into()
+            .or(Err(Error::FunctionFailed))?;
+        self.se
+            .run_command(
+                &WriteSymmKey::builder()
+                    .is_auth(true)
+                    .key_type(SymmKeyType::Aes)
+                    .policy(PolicySet(&policy_for_intermediary(se_id.key_id())))
+                    .object_id(se_id.intermediary_key_id())
+                    .value(&key)
+                    .build(),
+                buf,
+            )
+            .or(Err(Error::FunctionFailed))?;
+
+        // IMPORTING RSA KEY
+        let parsed =
+            handle_rsa_import_format(&req.raw_key).ok_or_else(|| Error::InvalidSerializedKey)?;
+        self.se
+            .run_command(
+                &WriteRsaKey::builder()
+                    .key_type(P1KeyType::KeyPair)
+                    .object_id(se_id.key_id())
+                    .key_size(size.into())
+                    .policy(PolicySet(&policy_for_key(se_id.intermediary_key_id())))
+                    .e(parsed.e)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error_now!("Failed to import public exponent");
+                Error::FunctionFailed
+            })?;
+        self.se
+            .run_command(
+                &WriteRsaKey::builder()
+                    .key_type(P1KeyType::KeyPair)
+                    .object_id(se_id.key_id())
+                    .n(&parsed.n)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error_now!("Failed to import public exponent");
+                Error::FunctionFailed
+            })?;
+        self.se
+            .run_command(
+                &WriteRsaKey::builder()
+                    .key_type(P1KeyType::KeyPair)
+                    .object_id(se_id.key_id())
+                    .d(&parsed.d)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error_now!("Failed to import public exponent");
+                Error::FunctionFailed
+            })?;
+        // FINISHED IMPORTING RSA KEY
+
+        let key_material = cbor_serialize(
+            &VolatileRsaKey {
+                key_id: se_id,
+                intermediary_key: key,
+            },
+            buf,
+        )
+        .or(Err(Error::CborError))?;
+        let key = key_id_for_obj(se_id.0, ty);
+        se050_keystore.overwrite_key(
+            Location::Volatile,
+            Secrecy::Secret,
+            kind,
+            &key,
+            key_material,
+        )?;
+        Ok(reply::UnsafeInjectKey { key })
+    }
+
     fn unsafe_inject_volatile<R: CryptoRng + RngCore>(
         &mut self,
         req: &request::UnsafeInjectKey,
@@ -2317,7 +2442,122 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         rng: &mut R,
         ns: NamespaceValue,
     ) -> Result<reply::UnsafeInjectKey, Error> {
-        todo!()
+        let (kind, ty) = match req.mechanism {
+            Mechanism::Ed255 => (Kind::Ed255, KeyType::Ed255),
+            Mechanism::X255 => (Kind::X255, KeyType::X255),
+            Mechanism::P256 => (Kind::P256, KeyType::P256),
+            Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => {
+                return self.unsafe_inject_volatile_rsa(
+                    req,
+                    se050_keystore,
+                    2048,
+                    Kind::Rsa2048,
+                    KeyType::Rsa2048,
+                    rng,
+                    ns,
+                );
+            }
+            Mechanism::Rsa3072Raw | Mechanism::Rsa3072Pkcs1v15 => {
+                return self.unsafe_inject_volatile_rsa(
+                    req,
+                    se050_keystore,
+                    3072,
+                    Kind::Rsa3072,
+                    KeyType::Rsa3072,
+                    rng,
+                    ns,
+                );
+            }
+            Mechanism::Rsa4096Raw | Mechanism::Rsa4096Pkcs1v15 => {
+                return self.unsafe_inject_volatile_rsa(
+                    req,
+                    se050_keystore,
+                    4096,
+                    Kind::Rsa4096,
+                    KeyType::Rsa4096,
+                    rng,
+                    ns,
+                );
+            }
+            // Other mechanisms are filtered through the `supported` function
+            _ => unreachable!(),
+        };
+        let buf = &mut [0; 128];
+        let id = VolatileObjectId::new(rng, ns);
+
+        match req.mechanism {
+            Mechanism::Ed255 => {
+                self.se
+                    .run_command(
+                        &WriteEcKey::builder()
+                            .key_type(P1KeyType::Private)
+                            .private_key(&req.raw_key)
+                            .transient(true)
+                            .policy(POLICY)
+                            .curve(EcCurve::IdEccEd25519)
+                            .object_id(*id)
+                            .build(),
+                        buf,
+                    )
+                    .map_err(|_err| {
+                        error_now!("Failed to inject key: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+            }
+            Mechanism::X255 => {
+                self.se
+                    .run_command(
+                        &WriteEcKey::builder()
+                            .key_type(P1KeyType::Private)
+                            .private_key(&req.raw_key)
+                            .transient(true)
+                            .policy(POLICY)
+                            .curve(EcCurve::IdEccMontDh25519)
+                            .object_id(*id)
+                            .build(),
+                        buf,
+                    )
+                    .map_err(|_err| {
+                        error_now!("Failed to inject key: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+            }
+            Mechanism::P256 => {
+                self.se
+                    .run_command(
+                        &WriteEcKey::builder()
+                            .key_type(P1KeyType::Private)
+                            .private_key(&req.raw_key)
+                            .policy(POLICY)
+                            .transient(true)
+                            .curve(EcCurve::NistP256)
+                            .object_id(*id)
+                            .build(),
+                        buf,
+                    )
+                    .map_err(|_err| {
+                        error_now!("Failed to inject key: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+            }
+            _ => unreachable!(),
+        }
+        let exported = self
+            .se
+            .run_command(&ExportObject::builder().object_id(id.0).build(), buf)
+            .or(Err(Error::FunctionFailed))?
+            .data;
+        let key = key_id_for_obj(id.0, ty);
+        let material: Bytes<1024> = trussed::cbor_serialize_bytes(&VolatileKeyMaterialRef {
+            object_id: id,
+            exported_material: exported,
+        })
+        .or(Err(Error::FunctionFailed))?;
+        se050_keystore.overwrite_key(Location::Volatile, Secrecy::Secret, kind, &key, &material)?;
+
+        // Remove any data from the transient storage
+        self.reselect()?;
+        Ok(reply::UnsafeInjectKey { key })
     }
 
     fn unsafe_inject_persistent_rsa(
@@ -2415,7 +2655,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                         Error::FunctionFailed
                     })?;
             }
-            Mechanism::P256 => {
+            Mechanism::P256Prehashed | Mechanism::P256 => {
                 self.se
                     .run_command(
                         &WriteEcKey::builder()
@@ -2441,7 +2681,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Mechanism::Rsa4096Raw | Mechanism::Rsa4096Pkcs1v15 => {
                 self.unsafe_inject_persistent_rsa(req, id, 4096)?
             }
-            _ => todo!(),
+            _ => unreachable!(),
         }
 
         let ty = match req.mechanism {
