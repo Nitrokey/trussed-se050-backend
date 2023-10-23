@@ -2819,10 +2819,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let mut backend_path = core_ctx.path.clone();
         backend_path.push(&PathBuf::from(BACKEND_DIR));
         backend_path.push(&PathBuf::from(CORE_DIR));
-        let _fs = &mut resources.filestore(backend_path.clone());
-        let _global_fs = &mut resources.filestore(PathBuf::from(BACKEND_DIR));
         let rng = &mut resources.rng()?;
-        let _client_id = core_ctx.path.clone();
 
         let se050_keystore = &mut resources.keystore(backend_path)?;
         let core_keystore = &mut resources.keystore(core_ctx.path.clone())?;
