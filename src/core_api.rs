@@ -1,6 +1,14 @@
 //! Implementations of the core APIs for the SE050 backend
 
 use cbor_smol::{cbor_deserialize, cbor_serialize};
+use crypto_bigint::{
+    modular::{
+        runtime_mod::{DynResidue, DynResidueParams},
+        Retrieve,
+    },
+    subtle::CtOption,
+    Checked, CtChoice, Encoding, U4096,
+};
 use embedded_hal::blocking::delay::DelayUs;
 use hex_literal::hex;
 use littlefs2::path::PathBuf;
@@ -29,7 +37,7 @@ use trussed::{
     types::{KeyId, KeySerialization, Location, Mechanism, Message},
     Bytes, Error,
 };
-use trussed_rsa_alloc::RsaPublicParts;
+use trussed_rsa_alloc::{RsaImportFormat, RsaPublicParts};
 
 use crate::{
     namespacing::{
@@ -89,6 +97,65 @@ fn bits_and_kind_from_mechanism(mechanism: Mechanism) -> Result<(usize, key::Kin
         Mechanism::Rsa4096Raw => Ok((4096, key::Kind::Rsa4096, true)),
         _ => Err(Error::RequestNotAvailable),
     }
+}
+
+const RSA_ARR_SIZE: usize = 4096 / 8;
+struct RsaImportElements<'a> {
+    e: &'a [u8],
+    d: [u8; RSA_ARR_SIZE],
+    n: [u8; RSA_ARR_SIZE],
+}
+
+fn be_slice_to_bigint(data: &[u8]) -> Option<U4096> {
+    if data.len() > RSA_ARR_SIZE {
+        return None;
+    }
+    let mut arr = [0; 4096 / 8];
+    arr[RSA_ARR_SIZE - data.len()..].copy_from_slice(data);
+    Some(U4096::from_be_bytes(arr))
+}
+
+fn handle_rsa_import_format(data: &[u8]) -> Option<RsaImportElements> {
+    let parsed = RsaImportFormat::deserialize(&data)
+        .map_err(|_err| {
+            error_now!("Failed to parse rsa key");
+        })
+        .ok()?;
+    let e = be_slice_to_bigint(parsed.e)?;
+
+    let p = Checked(CtOption::new(
+        be_slice_to_bigint(parsed.p)?,
+        CtChoice::TRUE.into(),
+    ));
+    let q = Checked(CtOption::new(
+        be_slice_to_bigint(parsed.q)?,
+        CtChoice::TRUE.into(),
+    ));
+    let n_opt = p * Checked(CtOption::new(e, CtChoice::TRUE.into()));
+    let one = Checked(CtOption::new(
+        be_slice_to_bigint(parsed.q)?,
+        CtChoice::TRUE.into(),
+    ));
+
+    let phi: CtOption<_> = ((p - one) * (q - one)).into();
+    let d_opt = phi.and_then(|phi| {
+        let phi_param = DynResidueParams::new(&phi);
+        let e_residue = DynResidue::new(&e, phi_param);
+        let (d, success) = e_residue.invert();
+        CtOption::new(d.retrieve(), success.into())
+    });
+
+    let Some((d, n)) = d_opt
+        .and_then(|d| {
+            let n: CtOption<_> = n_opt.into();
+            n.map(|n| (d.to_be_bytes(), n.to_be_bytes()))
+        })
+        .into()
+    else {
+        return None;
+    };
+
+    Some(RsaImportElements { e: parsed.e, d, n })
 }
 
 impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
@@ -1204,7 +1271,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     ) -> Result<reply::Sign, Error> {
         match req.mechanism {
             Mechanism::P256 => {
-                todo!("Implement P256 without prehashing");
+                debug_now!("Implement P256 without prehashing");
+                return Err(Error::FunctionNotSupported);
             }
             Mechanism::P256Prehashed => self.sign_ecdsa(req, se050_keystore, ns),
             Mechanism::Ed255 => self.sign_eddsa(req, se050_keystore, ns),
@@ -1444,7 +1512,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     ) -> Result<reply::Verify, Error> {
         match req.mechanism {
             Mechanism::P256 => {
-                todo!("Implement P256 verification without prehashing");
+                debug_now!("Implement P256 without prehashing");
+                return Err(Error::FunctionNotSupported);
             }
             Mechanism::P256Prehashed => self.verify_ecdsa_prehashed(
                 req,
@@ -2145,19 +2214,21 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         se050_keystore: &mut impl Keystore,
         ns: NamespaceValue,
     ) -> Result<reply::DeleteAllKeys, Error> {
-        let _core_count = core_keystore.delete_all(req.location)?;
-        se050_keystore.delete_all(req.location)?;
+        let core_count = core_keystore.delete_all(req.location)?;
+        let _fs_count = se050_keystore.delete_all(req.location)?;
+        debug_now!("Deleted core: {core_count}");
+        debug_now!("Deleted fs: {_fs_count}");
 
         let buf = &mut [0; 1024];
         let buf2 = &mut [0; 128];
-        let mut count = 0;
+        let mut count = 0u16;
         let mut offset = 0;
         loop {
             let to_delete = self
                 .se
                 .run_command(
                     &ReadIdList {
-                        offset: (offset - count).into(),
+                        offset: offset.into(),
                         filter: SecureObjectFilter::All,
                     },
                     buf,
@@ -2171,10 +2242,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             offset += (to_delete.ids.len() / 4) as u16;
             for obj_slice in to_delete.ids.chunks_exact(4) {
                 let obj = ObjectId(obj_slice.try_into().unwrap());
+                debug_now!("Dealing with obj: {obj:02x?}");
                 if !object_in_range(obj) {
-                    count += 1;
                     continue;
                 }
+                debug_now!("In range");
                 let Some((ns_to_check, parsed_obj_id)) = ParsedObjectId::parse(obj) else {
                     debug_now!("Failed to parse object id");
                     continue;
@@ -2182,13 +2254,15 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 if ns_to_check != ns {
                     continue;
                 }
+                debug_now!("In ns");
+                debug_now!("Got parsed: {parsed_obj_id:02x?}");
                 match (req.location, parsed_obj_id) {
                     (
                         Location::Internal | Location::External,
                         ParsedObjectId::PersistentKey(obj),
                     ) => {
                         count += 1;
-                        offset -= 1;
+                        offset = offset.saturating_sub(1);
                         self.se
                             .run_command(&DeleteSecureObject { object_id: obj.0 }, buf2)
                             .map_err(|_err| {
@@ -2198,7 +2272,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     }
                     (Location::Volatile, ParsedObjectId::VolatileKey(obj)) => {
                         count += 1;
-                        offset -= 1;
+                        offset = offset.saturating_sub(1);
                         self.se
                             .run_command(&DeleteSecureObject { object_id: obj.0 }, buf2)
                             .map_err(|_err| {
@@ -2207,8 +2281,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                             })?;
                     }
                     (Location::Volatile, ParsedObjectId::VolatileRsaKey(obj)) => {
-                        count += 1;
-                        offset -= self.delete_volatile_rsa_key_on_se050(obj)?;
+                        let deleted_count = self.delete_volatile_rsa_key_on_se050(obj)?;
+                        // VolatileRsaKeys can appear twice (intermediary and real key. They should be counted as one)
+                        count += if deleted_count == 0 { 0 } else { 1 };
+                        offset = offset.saturating_sub(deleted_count);
                     }
                     (
                         _,
@@ -2230,8 +2306,190 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         }
 
         Ok(reply::DeleteAllKeys {
-            count: count.into(),
+            count: core_count + usize::from(count),
         })
+    }
+
+    fn unsafe_inject_volatile<R: CryptoRng + RngCore>(
+        &mut self,
+        req: &request::UnsafeInjectKey,
+        se050_keystore: &mut impl Keystore,
+        rng: &mut R,
+        ns: NamespaceValue,
+    ) -> Result<reply::UnsafeInjectKey, Error> {
+        todo!()
+    }
+
+    fn unsafe_inject_persistent_rsa(
+        &mut self,
+        req: &request::UnsafeInjectKey,
+        id: PersistentObjectId,
+        size: u16,
+    ) -> Result<(), Error> {
+        let buf = &mut [0; 128];
+        let parsed =
+            handle_rsa_import_format(&req.raw_key).ok_or_else(|| Error::InvalidSerializedKey)?;
+        self.se
+            .run_command(
+                &WriteRsaKey::builder()
+                    .key_type(P1KeyType::KeyPair)
+                    .object_id(*id)
+                    .key_size(size.into())
+                    .e(parsed.e)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error_now!("Failed to import public exponent");
+                Error::FunctionFailed
+            })?;
+        self.se
+            .run_command(
+                &WriteRsaKey::builder()
+                    .key_type(P1KeyType::KeyPair)
+                    .object_id(*id)
+                    .n(&parsed.n)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error_now!("Failed to import public exponent");
+                Error::FunctionFailed
+            })?;
+        self.se
+            .run_command(
+                &WriteRsaKey::builder()
+                    .key_type(P1KeyType::KeyPair)
+                    .object_id(*id)
+                    .d(&parsed.d)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error_now!("Failed to import public exponent");
+                Error::FunctionFailed
+            })?;
+        Ok(())
+    }
+
+    fn unsafe_inject_persistent<R: CryptoRng + RngCore>(
+        &mut self,
+        req: &request::UnsafeInjectKey,
+        rng: &mut R,
+        ns: NamespaceValue,
+    ) -> Result<reply::UnsafeInjectKey, Error> {
+        let buf = &mut [0; 1024];
+        let id = PersistentObjectId::new(rng, ns);
+        match req.mechanism {
+            Mechanism::Ed255 => {
+                self.se
+                    .run_command(
+                        &WriteEcKey::builder()
+                            .key_type(P1KeyType::Private)
+                            .private_key(&req.raw_key)
+                            .policy(POLICY)
+                            .curve(EcCurve::IdEccEd25519)
+                            .object_id(*id)
+                            .build(),
+                        buf,
+                    )
+                    .map_err(|_err| {
+                        error_now!("Failed to inject key: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+            }
+            Mechanism::X255 => {
+                self.se
+                    .run_command(
+                        &WriteEcKey::builder()
+                            .key_type(P1KeyType::Private)
+                            .private_key(&req.raw_key)
+                            .policy(POLICY)
+                            .curve(EcCurve::IdEccMontDh25519)
+                            .object_id(*id)
+                            .build(),
+                        buf,
+                    )
+                    .map_err(|_err| {
+                        error_now!("Failed to inject key: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+            }
+            Mechanism::P256 => {
+                self.se
+                    .run_command(
+                        &WriteEcKey::builder()
+                            .key_type(P1KeyType::Private)
+                            .private_key(&req.raw_key)
+                            .policy(POLICY)
+                            .curve(EcCurve::NistP256)
+                            .object_id(*id)
+                            .build(),
+                        buf,
+                    )
+                    .map_err(|_err| {
+                        error_now!("Failed to inject key: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+            }
+            Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => {
+                self.unsafe_inject_persistent_rsa(req, id, 2048)?
+            }
+            Mechanism::Rsa3072Raw | Mechanism::Rsa3072Pkcs1v15 => {
+                self.unsafe_inject_persistent_rsa(req, id, 3072)?
+            }
+            Mechanism::Rsa4096Raw | Mechanism::Rsa4096Pkcs1v15 => {
+                self.unsafe_inject_persistent_rsa(req, id, 4096)?
+            }
+            _ => todo!(),
+        }
+
+        let ty = match req.mechanism {
+            Mechanism::Ed255 => KeyType::Ed255,
+
+            Mechanism::X255 => KeyType::X255,
+
+            // TODO First write curve somehow
+            Mechanism::P256 => KeyType::P256,
+            Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => KeyType::Rsa2048,
+            Mechanism::Rsa3072Raw | Mechanism::Rsa3072Pkcs1v15 => KeyType::Rsa3072,
+            Mechanism::Rsa4096Raw | Mechanism::Rsa4096Pkcs1v15 => KeyType::Rsa4096,
+            // Other mechanisms are filtered through the `supported` function
+            _ => unreachable!(),
+        };
+
+        Ok(reply::UnsafeInjectKey {
+            key: key_id_for_obj(id.0, ty),
+        })
+    }
+
+    fn unsafe_inject_key<R: CryptoRng + RngCore>(
+        &mut self,
+        req: &request::UnsafeInjectKey,
+        se050_keystore: &mut impl Keystore,
+        rng: &mut R,
+        ns: NamespaceValue,
+    ) -> Result<reply::UnsafeInjectKey, Error> {
+        match (req.mechanism, req.format) {
+            (
+                Mechanism::Ed255 | Mechanism::X255 | Mechanism::P256 | Mechanism::P256Prehashed,
+                KeySerialization::Raw,
+            ) => {}
+            (
+                Mechanism::Rsa2048Raw
+                | Mechanism::Rsa3072Raw
+                | Mechanism::Rsa4096Raw
+                | Mechanism::Rsa2048Pkcs1v15
+                | Mechanism::Rsa3072Pkcs1v15
+                | Mechanism::Rsa4096Pkcs1v15,
+                KeySerialization::RsaParts,
+            ) => {}
+            _ => return Err(Error::InvalidSerializationFormat),
+        }
+        match req.attributes.persistence {
+            Location::Volatile => self.unsafe_inject_volatile(req, se050_keystore, rng, ns),
+            Location::Internal | Location::External => self.unsafe_inject_persistent(req, rng, ns),
+        }
     }
 }
 
@@ -2368,7 +2626,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Request::Sign(req) if supported(req.mechanism) => {
                 self.sign(req, se050_keystore, ns, rng)?.into()
             }
-            Request::UnsafeInjectKey(req) if supported(req.mechanism) => todo!(),
+            Request::UnsafeInjectKey(req) if supported(req.mechanism) => {
+                self.unsafe_inject_key(req, se050_keystore, rng, ns)?.into()
+            }
             Request::UnwrapKey(req) => self
                 .unwrap_key(req, core_keystore, se050_keystore, ns)?
                 .into(),
