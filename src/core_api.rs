@@ -113,7 +113,7 @@ fn be_slice_to_bigint(data: &[u8]) -> Option<U4096> {
 }
 
 fn handle_rsa_import_format(data: &[u8]) -> Option<RsaImportElements> {
-    let parsed = RsaImportFormat::deserialize(&data)
+    let parsed = RsaImportFormat::deserialize(data)
         .map_err(|_err| {
             error_now!("Failed to parse rsa key");
         })
@@ -155,6 +155,7 @@ fn handle_rsa_import_format(data: &[u8]) -> Option<RsaImportElements> {
     Some(RsaImportElements { e: parsed.e, d, n })
 }
 
+#[allow(clippy::too_many_arguments)]
 impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     fn random_bytes(&mut self, count: usize) -> Result<trussed::Reply, Error> {
         if count >= MAX_MESSAGE_LENGTH {
@@ -271,7 +272,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 })?;
             count += 1;
         }
-        if !self
+        let exists = self
             .se
             .run_command(
                 &CheckObjectExists {
@@ -284,8 +285,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Error::FunctionFailed
             })?
             .result
-            .is_success()
-        {
+            .is_success();
+        if !exists {
             return Ok(count);
         }
 
@@ -1269,7 +1270,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         match req.mechanism {
             Mechanism::P256 => {
                 debug_now!("Implement P256 without prehashing");
-                return Err(Error::FunctionNotSupported);
+                Err(Error::FunctionNotSupported)
             }
             Mechanism::P256Prehashed => self.sign_ecdsa(req, se050_keystore, ns),
             Mechanism::Ed255 => self.sign_eddsa(req, se050_keystore, ns),
@@ -1510,7 +1511,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         match req.mechanism {
             Mechanism::P256 => {
                 debug_now!("Implement P256 without prehashing");
-                return Err(Error::FunctionNotSupported);
+                Err(Error::FunctionNotSupported)
             }
             Mechanism::P256Prehashed => self.verify_ecdsa_prehashed(
                 req,
@@ -2371,8 +2372,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             .or(Err(Error::FunctionFailed))?;
 
         // IMPORTING RSA KEY
-        let parsed =
-            handle_rsa_import_format(&req.raw_key).ok_or_else(|| Error::InvalidSerializedKey)?;
+        let parsed = handle_rsa_import_format(&req.raw_key).ok_or(Error::InvalidSerializedKey)?;
         self.se
             .run_command(
                 &WriteRsaKey::builder()
@@ -2567,8 +2567,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         size: u16,
     ) -> Result<(), Error> {
         let buf = &mut [0; 128];
-        let parsed =
-            handle_rsa_import_format(&req.raw_key).ok_or_else(|| Error::InvalidSerializedKey)?;
+        let parsed = handle_rsa_import_format(&req.raw_key).ok_or(Error::InvalidSerializedKey)?;
         self.se
             .run_command(
                 &WriteRsaKey::builder()
