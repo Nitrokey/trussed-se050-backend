@@ -20,6 +20,8 @@ mod trussed_auth_impl;
 use trussed_auth::MAX_HW_KEY_LEN;
 use trussed_auth_impl::{AuthContext, HardwareKey};
 
+mod staging;
+
 mod core_api;
 pub mod manage;
 pub mod namespacing;

@@ -44,8 +44,8 @@ use crate::{
     object_in_range, Context, Se050Backend, BACKEND_DIR,
 };
 
-const BUFFER_LEN: usize = 2048;
-const CORE_DIR: &str = "se050-core";
+pub(crate) const BUFFER_LEN: usize = 2048;
+pub(crate) const CORE_DIR: &str = "se050-core";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct VolatileKeyMaterial {
@@ -1985,7 +1985,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(reply::Clear { success })
     }
 
-    fn wrap_key(
+    pub(crate) fn wrap_key(
         &mut self,
         req: &request::WrapKey,
         core_keystore: &mut impl Keystore,
@@ -2040,7 +2040,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(reply::WrapKey { wrapped_key })
     }
 
-    fn unwrap_key(
+    pub(crate) fn unwrap_key(
         &mut self,
         req: &request::UnwrapKey,
         core_keystore: &mut impl Keystore,
