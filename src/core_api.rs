@@ -441,7 +441,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 &mut [0; 128],
             )
             .map_err(|_err| {
-                error_now!("Failed to re-import key for derive: {_err:?}");
+                error_now!("Failed to re-import key:  {_err:?}");
                 Error::FunctionFailed
             })?;
         Ok(())
@@ -1967,6 +1967,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         se050_keystore: &mut impl Keystore,
         ns: NamespaceValue,
     ) -> Result<reply::Clear, Error> {
+        debug_now!("Clearing: {:?}", req.key);
         let (parsed_key, _parsed_ty) = parse_key_id(req.key, ns).ok_or_else(|| {
             debug_now!("Failed to parse key id");
             Error::RequestNotAvailable
@@ -2013,6 +2014,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         debug!("trussed: Chacha8Poly1305::WrapKey");
 
         let serialized_key = se050_keystore.load_key(key::Secrecy::Secret, None, &req.key)?;
+        debug_now!("Wrapping material: {}", hex_str!(&serialized_key.material));
 
         let message = Message::from_slice(&serialized_key.serialize()).unwrap();
 
@@ -2041,13 +2043,29 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(reply::WrapKey { wrapped_key })
     }
 
+    fn ensure_exists(&mut self, object_id: ObjectId, buf: &mut [u8]) -> Result<(), Error> {
+        let res = self
+            .se
+            .run_command(&CheckObjectExists { object_id }, buf)
+            .map_err(|_err| {
+                debug_now!("Failed to check existence");
+                Error::FunctionFailed
+            })?;
+        if !res.result.is_success() {
+            debug_now!("{object_id:?} doesn't exist");
+            return Err(Error::FunctionFailed);
+        }
+        Ok(())
+    }
+
     pub(crate) fn unwrap_key(
         &mut self,
         req: &request::UnwrapKey,
         core_keystore: &mut impl Keystore,
         se050_keystore: &mut impl Keystore,
-        _ns: NamespaceValue,
+        ns: NamespaceValue,
     ) -> Result<reply::UnwrapKey, Error> {
+        debug_now!("Unwrapping_key");
         if !matches!(req.mechanism, Mechanism::Chacha8Poly1305)
             || req.wrapped_key.first() != Some(&0)
         {
@@ -2104,19 +2122,43 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Kind::P256 => KeyType::P256,
             _ => return Err(Error::FunctionFailed),
         };
-
         let key_id = match ty {
             WrappedKeyType::Volatile => {
                 let mat: VolatileKeyMaterialRef =
                     trussed::cbor_deserialize(&material).map_err(|_err| Error::CborError)?;
+                if let Some((parsed_ns, _)) = ParsedObjectId::parse(mat.object_id.0) {
+                    if parsed_ns != ns {
+                        return Err(Error::ObjectHandleInvalid);
+                    }
+                } else {
+                    return Err(Error::ObjectHandleInvalid);
+                }
+                self.ensure_exists(mat.object_id.0, &mut [0; 128])?;
+
                 key_id_for_obj(mat.object_id.0, key_ty)
             }
             WrappedKeyType::VolatileRsa => {
+                if !matches!(kind, Kind::Rsa2048 | Kind::Rsa3072 | Kind::Rsa4096) {
+                    debug_now!("Bad kind for RSA volatile");
+                    return Err(Error::FunctionFailed);
+                }
                 let mat: VolatileRsaKey =
                     trussed::cbor_deserialize(&material).map_err(|_err| Error::CborError)?;
+                if let Some((parsed_ns, _)) = ParsedObjectId::parse(mat.key_id.0) {
+                    if parsed_ns != ns {
+                        return Err(Error::ObjectHandleInvalid);
+                    }
+                } else {
+                    return Err(Error::ObjectHandleInvalid);
+                }
+                self.ensure_exists(mat.key_id.key_id(), &mut [0; 128])?;
+                self.ensure_exists(mat.key_id.intermediary_key_id(), &mut [0; 128])?;
+
                 key_id_for_obj(mat.key_id.0, key_ty)
             }
         };
+
+        debug_now!("Unwrapped material: {}", hex_str!(&material));
 
         se050_keystore.overwrite_key(
             Location::Volatile,
@@ -2812,7 +2854,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         resources: &mut trussed::service::ServiceResources<P>,
     ) -> Result<trussed::Reply, Error> {
         self.configure()?;
-        debug_now!("Trussed core SE050 request: {request:?}");
+        debug_now!("Trussed core SE050 request");
 
         // FIXME: Have a real implementation from trussed
         let mut backend_path = core_ctx.path.clone();
@@ -2889,9 +2931,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
         request: &Request,
         resources: &mut trussed::service::ServiceResources<P>,
     ) -> Result<trussed::Reply, Error> {
-        debug_now!("Got request: {request:?}");
+        // debug_now!("Got request: {request:?}");
         let res = self.core_request_internal(core_ctx, backend_ctx, request, resources);
-        debug_now!("Got res: {res:?}");
+        // debug_now!("Got res: {res:?}");
         res
     }
 }
