@@ -195,17 +195,25 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             debug_now!("Failed to parse key id");
             Error::RequestNotAvailable
         })?;
+        debug_now!("Deleting {key:?}, {_parsed_ty:?}");
         match parsed_key {
             ParsedObjectId::Pin(_)
             | ParsedObjectId::PinWithDerived(_)
             | ParsedObjectId::SaltValue(_) => Err(Error::ObjectHandleInvalid),
             ParsedObjectId::PersistentKey(PersistentObjectId(obj)) => {
+                debug_now!("Deleting persistent {obj:?}");
                 self.delete_persistent_key(obj)
             }
             ParsedObjectId::VolatileKey(VolatileObjectId(obj)) => {
+                debug_now!("Deleting volatile {obj:?}");
                 self.delete_volatile_key(key, obj, se050_keystore)
             }
             ParsedObjectId::VolatileRsaKey(obj) => {
+                debug_now!(
+                    "Deleting volatile rsa {:?} {:?}",
+                    obj.key_id(),
+                    obj.intermediary_key_id()
+                );
                 self.delete_volatile_rsa_key(*key, obj, se050_keystore)
             }
         }
@@ -244,6 +252,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let mut count = 0;
         let buf = &mut [0; 1024];
 
+        debug_now!(
+            "Deleting volatile RSA key {:?} {:?}",
+            se_id.key_id(),
+            se_id.intermediary_key_id()
+        );
         let exists = self
             .se
             .run_command(
@@ -488,6 +501,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                         error_now!("Failed to read key for derive: {_err:?}");
                         Error::FunctionFailed
                     })?;
+                assert_eq!(material.data.len(), 32);
                 let result = core_keystore.store_key(
                     req.attributes.persistence,
                     Secrecy::Public,
@@ -505,6 +519,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                         error_now!("Failed to read key for derive: {_err:?}");
                         Error::FunctionFailed
                     })?;
+                assert_eq!(material.data.len(), 32);
                 debug_now!("Material: {material:02x?}");
                 debug_now!("Len: {}", material.data.len());
                 let result = core_keystore.store_key(
@@ -800,6 +815,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             &key,
             key_material,
         )?;
+        debug_now!("Generated key: {key:?}");
         Ok(reply::GenerateKey { key })
     }
 
@@ -897,6 +913,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
         // Remove any data from the transient storage
         self.reselect()?;
+        debug_now!("Generated key: {key:?}");
         Ok(reply::GenerateKey { key })
     }
 
@@ -1992,9 +2009,19 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             | ParsedObjectId::SaltValue(_) => return Err(Error::ObjectHandleInvalid),
 
             // We delete the exported data, which can be imported again if unwrapped.
-            ParsedObjectId::VolatileKey(_obj_id) => se050_keystore.delete_key(&req.key),
+            ParsedObjectId::VolatileKey(_obj_id) => {
+                debug_now!("Clearing data for {:?}", _obj_id.0);
+                se050_keystore.delete_key(&req.key)
+            }
             // We delete the key that protects the actual RSA private key data, which can be imported again if unwrapped.
-            ParsedObjectId::VolatileRsaKey(_obj_id) => se050_keystore.delete_key(&req.key),
+            ParsedObjectId::VolatileRsaKey(_obj_id) => {
+                debug_now!(
+                    "Clearing data for {:?} and {:?}",
+                    _obj_id.key_id(),
+                    _obj_id.intermediary_key_id()
+                );
+                se050_keystore.delete_key(&req.key)
+            }
         };
         Ok(reply::Clear { success })
     }
@@ -2023,7 +2050,16 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 return Err(Error::ObjectHandleInvalid);
             }
         };
-        debug!("trussed: Chacha8Poly1305::WrapKey");
+        debug_now!("trussed: Chacha8Poly1305::WrapKey {:?}", req.key);
+        match parsed_key {
+            ParsedObjectId::VolatileKey(id) => {
+                debug_now!("Id: {:?}", id.0);
+            }
+            ParsedObjectId::VolatileRsaKey(id) => {
+                debug_now!("Rsa Ids: {:?}", (id.key_id(), id.intermediary_key_id()));
+            }
+            _ => unreachable!(),
+        }
 
         let serialized_key = se050_keystore.load_key(key::Secrecy::Secret, None, &req.key)?;
         debug_now!("Wrapping material: {}", hex_str!(&serialized_key.material));
@@ -2866,7 +2902,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         resources: &mut trussed::service::ServiceResources<P>,
     ) -> Result<trussed::Reply, Error> {
         self.configure()?;
-        debug_now!("Trussed core SE050 request");
 
         // FIXME: Have a real implementation from trussed
         let mut backend_path = core_ctx.path.clone();
