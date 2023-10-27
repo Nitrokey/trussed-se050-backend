@@ -1444,8 +1444,14 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Error::FunctionFailed
             })?;
 
+        let signature_der = p256::ecdsa::Signature::from_der(res.signature).map_err(|_err| {
+            error_now!("Failed to parse p256 signature: {_err:?}");
+            Error::FunctionFailed
+        })?;
         let mut signature = Bytes::new();
-        signature.extend_from_slice(res.signature).unwrap();
+        signature
+            .extend_from_slice(&signature_der.to_bytes())
+            .unwrap();
 
         if let ParsedObjectId::VolatileKey(_) = parsed_key {
             self.reselect()?;
@@ -1581,6 +1587,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             })?;
         let buf = &mut [0; 1024];
         let id = generate_object_id_ns(rng, ns, ObjectKind::PublicTemporary);
+
+        let signature = p256::ecdsa::Signature::from_slice(&req.signature).map_err(|_err| {
+            error_now!("Failed to parse request signature: {_err:?}");
+            Error::FunctionFailed
+        })?;
+
         self.se
             .run_command(
                 &WriteEcKey::builder()
@@ -1602,7 +1614,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     .key_id(id)
                     .algo(algo)
                     .data(&req.message)
-                    .signature(&req.signature)
+                    .signature(signature.to_der().as_bytes())
                     .build(),
                 buf,
             )

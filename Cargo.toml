@@ -26,6 +26,7 @@ serde_bytes = { version = "0.11.12", default-features = false }
 trussed-rsa-alloc = { git = "https://github.com/Nitrokey/trussed-rsa-backend.git", rev = "2088e2f8a8d706276c1559717b4c6b6d4f270253" }
 postcard = "0.7.3"
 crypto-bigint = { version = "0.5.3", default-features = false }
+p256 = { version = "0.13.2", default-features = false, features = ["ecdsa-core"] }
 
 [patch.crates-io]
 se05x = { git = "https://github.com/Nitrokey/se05x.git", rev = "d8e4d1bdccce12aa8e506fb9b504d85d33efa8ed"} 
