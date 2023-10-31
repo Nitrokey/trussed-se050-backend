@@ -2572,16 +2572,24 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             // Other mechanisms are filtered through the `supported` function
             _ => unreachable!(),
         };
-        let buf = &mut [0; 128];
+        let buf = &mut [0; 1024];
         let id = VolatileObjectId::new(rng, ns);
 
         match req.mechanism {
             Mechanism::Ed255 => {
+                let private_data: [u8; 32] = (&**req.raw_key).try_into().map_err(|_| {
+                    debug_now!("Raw key is too large");
+                    Error::InvalidSerializedKey
+                })?;
+
+                let key = salty::signature::Keypair::from(&private_data);
+                let public_key = key.public.to_bytes();
                 self.se
                     .run_command(
                         &WriteEcKey::builder()
-                            .key_type(P1KeyType::Private)
+                            .key_type(P1KeyType::KeyPair)
                             .private_key(&req.raw_key)
+                            .public_key(&public_key)
                             .transient(true)
                             .policy(POLICY)
                             .curve(EcCurve::IdEccEd25519)
@@ -2595,11 +2603,19 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     })?;
             }
             Mechanism::X255 => {
+                let private_data: [u8; 32] = (&**req.raw_key).try_into().map_err(|_| {
+                    debug_now!("Raw key is too large");
+                    Error::InvalidSerializedKey
+                })?;
+
+                let key = salty::agreement::SecretKey::from_seed(&private_data);
+                let public_key = key.public().to_bytes();
                 self.se
                     .run_command(
                         &WriteEcKey::builder()
-                            .key_type(P1KeyType::Private)
+                            .key_type(P1KeyType::KeyPair)
                             .private_key(&req.raw_key)
+                            .public_key(&public_key)
                             .transient(true)
                             .policy(POLICY)
                             .curve(EcCurve::IdEccMontDh25519)
@@ -2613,11 +2629,18 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     })?;
             }
             Mechanism::P256 => {
+                let private =
+                    p256_cortex_m4::SecretKey::from_bytes(&req.raw_key).map_err(|_| {
+                        debug_now!("Raw key is invalid");
+                        Error::InvalidSerializedKey
+                    })?;
+                let public_key = private.public_key().to_uncompressed_sec1_bytes();
                 self.se
                     .run_command(
                         &WriteEcKey::builder()
-                            .key_type(P1KeyType::Private)
+                            .key_type(P1KeyType::KeyPair)
                             .private_key(&req.raw_key)
+                            .public_key(&public_key)
                             .policy(POLICY)
                             .transient(true)
                             .curve(EcCurve::NistP256)
@@ -2635,14 +2658,20 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let exported = self
             .se
             .run_command(&ExportObject::builder().object_id(id.0).build(), buf)
-            .or(Err(Error::FunctionFailed))?
+            .map_err(|_err| {
+                debug_now!("Failed to export imported key: {_err:?}");
+                Error::FunctionFailed
+            })?
             .data;
         let key = key_id_for_obj(id.0, ty);
         let material: Bytes<1024> = trussed::cbor_serialize_bytes(&VolatileKeyMaterialRef {
             object_id: id,
             exported_material: exported,
         })
-        .or(Err(Error::FunctionFailed))?;
+        .map_err(|_err| {
+            debug_now!("Failed to encode exported key: {_err:?}");
+            Error::FunctionFailed
+        })?;
         se050_keystore.overwrite_key(Location::Volatile, Secrecy::Secret, kind, &key, &material)?;
 
         // Remove any data from the transient storage
@@ -2711,11 +2740,19 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let id = PersistentObjectId::new(rng, ns);
         match req.mechanism {
             Mechanism::Ed255 => {
+                let private_data: [u8; 32] = (&**req.raw_key).try_into().map_err(|_| {
+                    debug_now!("Raw key is too large");
+                    Error::InvalidSerializedKey
+                })?;
+
+                let key = salty::signature::Keypair::from(&private_data);
+                let public_key = key.public.to_bytes();
                 self.se
                     .run_command(
                         &WriteEcKey::builder()
-                            .key_type(P1KeyType::Private)
+                            .key_type(P1KeyType::KeyPair)
                             .private_key(&req.raw_key)
+                            .public_key(&public_key)
                             .policy(POLICY)
                             .curve(EcCurve::IdEccEd25519)
                             .object_id(*id)
@@ -2728,11 +2765,19 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     })?;
             }
             Mechanism::X255 => {
+                let private_data: [u8; 32] = (&**req.raw_key).try_into().map_err(|_| {
+                    debug_now!("Raw key is too large");
+                    Error::InvalidSerializedKey
+                })?;
+
+                let key = salty::agreement::SecretKey::from_seed(&private_data);
+                let public_key = key.public().to_bytes();
                 self.se
                     .run_command(
                         &WriteEcKey::builder()
-                            .key_type(P1KeyType::Private)
+                            .key_type(P1KeyType::KeyPair)
                             .private_key(&req.raw_key)
+                            .public_key(&public_key)
                             .policy(POLICY)
                             .curve(EcCurve::IdEccMontDh25519)
                             .object_id(*id)
@@ -2745,11 +2790,18 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     })?;
             }
             Mechanism::P256Prehashed | Mechanism::P256 => {
+                let private =
+                    p256_cortex_m4::SecretKey::from_bytes(&req.raw_key).map_err(|_| {
+                        debug_now!("Raw key is invalid");
+                        Error::InvalidSerializedKey
+                    })?;
+                let public_key = private.public_key().to_uncompressed_sec1_bytes();
                 self.se
                     .run_command(
                         &WriteEcKey::builder()
-                            .key_type(P1KeyType::Private)
+                            .key_type(P1KeyType::KeyPair)
                             .private_key(&req.raw_key)
+                            .public_key(&public_key)
                             .policy(POLICY)
                             .curve(EcCurve::NistP256)
                             .object_id(*id)
