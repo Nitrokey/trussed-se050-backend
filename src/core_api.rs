@@ -2,8 +2,7 @@
 
 use cbor_smol::{cbor_deserialize, cbor_serialize};
 use crypto_bigint::{
-    modular::runtime_mod::{DynResidue, DynResidueParams},
-    subtle::CtOption,
+    subtle::{ConstantTimeGreater, CtOption},
     Checked, CtChoice, Encoding, U4096,
 };
 use embedded_hal::blocking::delay::DelayUs;
@@ -19,8 +18,8 @@ use se05x::{
             RsaVerify, VerifySessionUserId, WriteEcKey, WriteRsaKey, WriteSymmKey, WriteUserId,
         },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
-        EcCurve, EcDsaSignatureAlgo, ObjectId, P1KeyType, RsaEncryptionAlgo, RsaKeyComponent,
-        RsaSignatureAlgo, Se05XResult, SecureObjectFilter, SymmKeyType,
+        EcCurve, EcDsaSignatureAlgo, ObjectId, P1KeyType, RsaEncryptionAlgo, RsaFormat,
+        RsaKeyComponent, RsaSignatureAlgo, Se05XResult, SecureObjectFilter, SymmKeyType,
     },
     t1::I2CForT1,
 };
@@ -112,13 +111,17 @@ fn be_slice_to_bigint(data: &[u8]) -> Option<U4096> {
     Some(U4096::from_be_bytes(arr))
 }
 
-fn handle_rsa_import_format(data: &[u8]) -> Option<RsaImportElements> {
+fn handle_rsa_import_format(data: &[u8], size: u16) -> Option<RsaImportElements> {
     let parsed = RsaImportFormat::deserialize(data)
         .map_err(|_err| {
             error_now!("Failed to parse rsa key");
         })
         .ok()?;
     let e = be_slice_to_bigint(parsed.e)?;
+    if e.bits() > size as usize {
+        warn_now!("Got too large e");
+        return None;
+    }
 
     let p = Checked(CtOption::new(
         be_slice_to_bigint(parsed.p)?,
@@ -128,24 +131,23 @@ fn handle_rsa_import_format(data: &[u8]) -> Option<RsaImportElements> {
         be_slice_to_bigint(parsed.q)?,
         CtChoice::TRUE.into(),
     ));
-    let n_opt = p * Checked(CtOption::new(e, CtChoice::TRUE.into()));
-    let one = Checked(CtOption::new(
-        be_slice_to_bigint(parsed.q)?,
-        CtChoice::TRUE.into(),
-    ));
+    let n_opt = p * q;
+    let one = Checked(CtOption::new(U4096::ONE, CtChoice::TRUE.into()));
 
     let phi: CtOption<_> = ((p - one) * (q - one)).into();
     let d_opt = phi.and_then(|phi| {
-        let phi_param = DynResidueParams::new(&phi);
-        let e_residue = DynResidue::new(&e, phi_param);
-        let (d, success) = e_residue.invert();
-        CtOption::new(d.retrieve(), success.into())
+        let (d, success) = e.inv_mod(&phi);
+        CtOption::new(d, success.into())
     });
 
     let Some((d, n)) = d_opt
         .and_then(|d| {
             let n: CtOption<_> = n_opt.into();
-            n.map(|n| (d.to_be_bytes(), n.to_be_bytes()))
+            n.and_then(|n| {
+                let value = (d.to_be_bytes(), n.to_be_bytes());
+                let choice = !(n.bits() as u64).ct_gt(&size.into());
+                CtOption::new(value, choice)
+            })
         })
         .into()
     else {
@@ -153,6 +155,43 @@ fn handle_rsa_import_format(data: &[u8]) -> Option<RsaImportElements> {
     };
 
     Some(RsaImportElements { e: parsed.e, d, n })
+}
+
+fn strip_0_prefix(data: &[u8]) -> &[u8] {
+    for (idx, b) in data.iter().enumerate() {
+        if *b == 0 {
+            continue;
+        } else {
+            return &data[idx..];
+        }
+    }
+    &[]
+}
+
+/// The SE050 doesn't expect pre-hashed data, but the RSA backend expects a prehashed DigestInf
+fn prepare_rsa_pkcs1v15(message: &[u8], keysize: usize) -> Result<Bytes<512>, Error> {
+    let (keysize_bytes, max_len) = match (keysize, message.len()) {
+        (2048, _) => (256, 103),
+        (3072, _) => (384, 154),
+        (4096, _) => (512, 205),
+        _ => {
+            error_now!("Got wrong message length: {}", message.len());
+            return Err(Error::SignDataTooLarge);
+        }
+    };
+    assert_eq!(keysize_bytes * 8, keysize);
+
+    if message.len() >= max_len {
+        return Err(Error::SignDataTooLarge);
+    }
+
+    let padding_len = keysize_bytes - message.len() - 3;
+    let mut data = Bytes::new();
+    data.resize(keysize_bytes, 0xFF).unwrap();
+    data[..2].copy_from_slice(&[0, 1]);
+    data[2 + padding_len] = 0;
+    data[keysize_bytes - message.len()..].copy_from_slice(message);
+    Ok(data)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1306,7 +1345,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         object_id: VolatileRsaObjectId,
         data_to_sign: &[u8],
         se050_keystore: &mut impl Keystore,
-        algo: RsaSignatureAlgo,
         kind: Kind,
         rng: &mut R,
     ) -> Result<reply::Sign, Error> {
@@ -1336,10 +1374,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             .se
             .run_session_command(
                 session_id,
-                &RsaSign {
+                &RsaEncrypt {
                     key_id: object_id.key_id(),
-                    algo,
-                    data: data_to_sign,
+                    algo: RsaEncryptionAlgo::NoPad,
+                    plaintext: data_to_sign,
                 },
                 buf,
             )
@@ -1347,14 +1385,15 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 error_now!("Failed to sign {_err:?}");
                 Error::FunctionFailed
             })?
-            .signature;
+            .ciphertext;
         self.se
             .run_session_command(session_id, &CloseSession {}, &mut [0; 128])
             .map_err(|_err| {
-                error_now!("Failed to decrypt {_err:?}");
+                error_now!("Failed to close session {_err:?}");
                 Error::FunctionFailed
             })?;
 
+        debug_now!("SIGNATURE_LEN: {:?}", signature.len());
         Ok(reply::Sign {
             signature: Bytes::from_slice(signature).map_err(|_err| Error::FunctionFailed)?,
         })
@@ -1364,16 +1403,15 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         &mut self,
         id: PersistentObjectId,
         data: &[u8],
-        algo: RsaSignatureAlgo,
     ) -> Result<reply::Sign, Error> {
         let buf = &mut [0; BUFFER_LEN];
         let res = self
             .se
             .run_command(
-                &RsaSign {
+                &RsaEncrypt {
                     key_id: id.0,
-                    algo,
-                    data,
+                    algo: RsaEncryptionAlgo::NoPad,
+                    plaintext: data,
                 },
                 buf,
             )
@@ -1382,7 +1420,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Error::FunctionFailed
             })?;
         Ok(reply::Sign {
-            signature: Bytes::from_slice(res.signature).map_err(|_err| Error::FunctionFailed)?,
+            signature: Bytes::from_slice(res.ciphertext).map_err(|_err| Error::FunctionFailed)?,
         })
     }
 
@@ -1405,18 +1443,19 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             return Err(Error::MechanismInvalid);
         }
 
-        let algo = match kind {
-            Kind::Rsa2048 => RsaSignatureAlgo::RsaSha256Pkcs1,
-            Kind::Rsa3072 => RsaSignatureAlgo::RsaSha384Pkcs1,
-            Kind::Rsa4096 => RsaSignatureAlgo::RsaSha512Pkcs1,
+        let keysize = match kind {
+            Kind::Rsa2048 => 2048,
+            Kind::Rsa3072 => 3072,
+            Kind::Rsa4096 => 4096,
             _ => unreachable!(),
         };
+        let message = prepare_rsa_pkcs1v15(&req.message[19..], keysize)?;
 
         match key_id {
             ParsedObjectId::VolatileRsaKey(key) => {
-                self.rsa_sign_volatile(req.key, key, &req.message, se050_keystore, algo, kind, rng)
+                self.rsa_sign_volatile(req.key, key, &message, se050_keystore, kind, rng)
             }
-            ParsedObjectId::PersistentKey(key) => self.rsa_sign_persistent(key, &req.message, algo),
+            ParsedObjectId::PersistentKey(key) => self.rsa_sign_persistent(key, &message),
             _ => Err(Error::ObjectHandleInvalid),
         }
     }
@@ -2430,6 +2469,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                             | ObjectPolicyFlags::ALLOW_DEC
                             | ObjectPolicyFlags::ALLOW_ENC
                             | ObjectPolicyFlags::ALLOW_READ
+                            | ObjectPolicyFlags::ALLOW_WRITE
                             | ObjectPolicyFlags::ALLOW_DELETE,
                     ),
                 },
@@ -2460,51 +2500,53 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .or(Err(Error::FunctionFailed))?;
-
         // IMPORTING RSA KEY
-        let parsed = handle_rsa_import_format(&req.raw_key).ok_or(Error::InvalidSerializedKey)?;
+        let parsed =
+            handle_rsa_import_format(&req.raw_key, size).ok_or(Error::InvalidSerializedKey)?;
         self.se
             .run_command(
                 &WriteRsaKey::builder()
                     .key_type(P1KeyType::KeyPair)
+                    .key_format(RsaFormat::Raw)
                     .object_id(se_id.key_id())
                     .key_size(size.into())
                     .policy(PolicySet(&policy_for_key(se_id.intermediary_key_id())))
-                    .e(parsed.e)
+                    .e(&parsed.e)
                     .build(),
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to import public exponent");
+                error_now!("Failed to import E {_err:?}");
                 Error::FunctionFailed
             })?;
         self.se
             .run_command(
                 &WriteRsaKey::builder()
-                    .key_type(P1KeyType::KeyPair)
+                    .key_type(P1KeyType::Na)
+                    .key_format(RsaFormat::Raw)
                     .object_id(se_id.key_id())
-                    .n(&parsed.n)
+                    .d(strip_0_prefix(&parsed.d))
                     .build(),
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to import public exponent");
+                error_now!("Failed to import D {_err:?}");
                 Error::FunctionFailed
             })?;
         self.se
             .run_command(
                 &WriteRsaKey::builder()
-                    .key_type(P1KeyType::KeyPair)
+                    .key_type(P1KeyType::Na)
+                    .key_format(RsaFormat::Raw)
                     .object_id(se_id.key_id())
-                    .d(&parsed.d)
+                    .n(strip_0_prefix(&parsed.n))
                     .build(),
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to import public exponent");
+                error_now!("Failed to import N {_err:?}");
                 Error::FunctionFailed
             })?;
-        // FINISHED IMPORTING RSA KEY
 
         let key_material = cbor_serialize(
             &VolatileRsaKey {
@@ -2686,11 +2728,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         size: u16,
     ) -> Result<(), Error> {
         let buf = &mut [0; 128];
-        let parsed = handle_rsa_import_format(&req.raw_key).ok_or(Error::InvalidSerializedKey)?;
+        let parsed =
+            handle_rsa_import_format(&req.raw_key, size).ok_or(Error::InvalidSerializedKey)?;
         self.se
             .run_command(
                 &WriteRsaKey::builder()
                     .key_type(P1KeyType::KeyPair)
+                    .key_format(RsaFormat::Raw)
                     .object_id(*id)
                     .key_size(size.into())
                     .e(parsed.e)
@@ -2698,33 +2742,35 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to import public exponent");
+                error_now!("Failed to import E: {_err:?}");
                 Error::FunctionFailed
             })?;
         self.se
             .run_command(
                 &WriteRsaKey::builder()
                     .key_type(P1KeyType::KeyPair)
+                    .key_format(RsaFormat::Raw)
                     .object_id(*id)
-                    .n(&parsed.n)
+                    .d(strip_0_prefix(&parsed.d))
                     .build(),
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to import public exponent");
+                error_now!("Failed to import d: {_err:?}");
                 Error::FunctionFailed
             })?;
         self.se
             .run_command(
                 &WriteRsaKey::builder()
                     .key_type(P1KeyType::KeyPair)
+                    .key_format(RsaFormat::Raw)
                     .object_id(*id)
-                    .d(&parsed.d)
+                    .n(strip_0_prefix(&parsed.n))
                     .build(),
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to import public exponent");
+                error_now!("Failed to import N: {_err:?}");
                 Error::FunctionFailed
             })?;
         Ok(())
