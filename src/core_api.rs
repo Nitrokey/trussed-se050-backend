@@ -1052,7 +1052,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let pub_key = core_keystore.load_key(Secrecy::Public, Some(kind), &req.public_key)?;
 
         let buf = &mut [0; 256];
-        let shared_secret = self
+        let mut shared_secret = self
             .se
             .run_command(
                 &EcdhGenerateSharedSecret {
@@ -1066,6 +1066,15 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Error::FunctionFailed
             })?
             .shared_secret;
+        if matches!(req.mechanism, Mechanism::X255) {
+            let Ok(mut tmp): Result<[u8; 32], _> = shared_secret.try_into() else {
+                debug_now!("Shared secret for X255 is not 32 bytes");
+                return Err(Error::FunctionFailed);
+            };
+            tmp.reverse();
+            buf[..32].copy_from_slice(&tmp);
+            shared_secret = &buf[..32];
+        }
 
         let flags = if req.attributes.serializable {
             key::Flags::SERIALIZABLE
@@ -1545,8 +1554,17 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Error::FunctionFailed
             })?;
 
+        if res.signature.len() != 64 {
+            debug_now!(
+                "Got signature of wrong length for EdDsa25519: {}",
+                res.signature.len()
+            );
+            return Err(Error::FunctionFailed);
+        }
         let mut signature = Bytes::new();
         signature.extend_from_slice(res.signature).unwrap();
+        signature[..32].reverse();
+        signature[32..].reverse();
 
         if let ParsedObjectId::VolatileKey(_) = parsed_key {
             self.reselect()?;
@@ -1876,18 +1894,19 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             return Err(Error::FunctionFailed);
         }
 
-        if req.serialized_key.len() != 32 {
+        let Ok(mut buf): Result<[u8; 32], _> = (&**req.serialized_key).try_into() else {
             debug_now!(
                 "Unsupported x255 public key length: {}",
                 req.serialized_key.len()
             );
             return Err(Error::MechanismParamInvalid);
-        }
+        };
+        buf.reverse();
         let key = core_keystore.store_key(
             req.attributes.persistence,
             Secrecy::Public,
             Kind::X255,
-            &req.serialized_key,
+            &buf,
         )?;
         Ok(reply::DeserializeKey { key })
     }
@@ -1901,18 +1920,19 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             return Err(Error::FunctionFailed);
         }
 
-        if req.serialized_key.len() != 32 {
+        let Ok(mut buf): Result<[u8; 32], _> = (&**req.serialized_key).try_into() else {
             debug_now!(
                 "Unsupported ed255 public key length: {}",
                 req.serialized_key.len()
             );
             return Err(Error::MechanismParamInvalid);
-        }
+        };
+        buf.reverse();
         let key = core_keystore.store_key(
             req.attributes.persistence,
             Secrecy::Public,
             Kind::Ed255,
-            &req.serialized_key,
+            &buf,
         )?;
         Ok(reply::DeserializeKey { key })
     }
@@ -1982,7 +2002,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             return Err(Error::FunctionFailed);
         }
 
-        let data = core_keystore.load_key(Secrecy::Public, Some(Kind::X255), &req.key)?;
+        let mut data = core_keystore.load_key(Secrecy::Public, Some(Kind::X255), &req.key)?;
+        data.material.reverse();
         Ok(reply::SerializeKey {
             serialized_key: data.material.into(),
         })
@@ -1997,7 +2018,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             return Err(Error::FunctionFailed);
         }
 
-        let data = core_keystore.load_key(Secrecy::Public, Some(Kind::Ed255), &req.key)?;
+        let mut data = core_keystore.load_key(Secrecy::Public, Some(Kind::Ed255), &req.key)?;
+        data.material.reverse();
         Ok(reply::SerializeKey {
             serialized_key: data.material.into(),
         })
@@ -2617,12 +2639,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 })?;
 
                 let key = salty::signature::Keypair::from(&private_data);
-                let public_key = key.public.to_bytes();
+                let mut public_key = key.public.to_bytes();
+                public_key.reverse();
                 self.se
                     .run_command(
                         &WriteEcKey::builder()
                             .key_type(P1KeyType::KeyPair)
-                            .private_key(&req.raw_key)
+                            .private_key(&private_data)
                             .public_key(&public_key)
                             .transient(true)
                             .policy(POLICY)
@@ -2637,18 +2660,20 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     })?;
             }
             Mechanism::X255 => {
-                let private_data: [u8; 32] = (&**req.raw_key).try_into().map_err(|_| {
+                let mut private_data: [u8; 32] = (&**req.raw_key).try_into().map_err(|_| {
                     debug_now!("Raw key is too large");
                     Error::InvalidSerializedKey
                 })?;
 
                 let key = salty::agreement::SecretKey::from_seed(&private_data);
-                let public_key = key.public().to_bytes();
+                let mut public_key = key.public().to_bytes();
+                private_data.reverse();
+                public_key.reverse();
                 self.se
                     .run_command(
                         &WriteEcKey::builder()
                             .key_type(P1KeyType::KeyPair)
-                            .private_key(&req.raw_key)
+                            .private_key(&private_data)
                             .public_key(&public_key)
                             .transient(true)
                             .policy(POLICY)
@@ -2785,7 +2810,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 })?;
 
                 let key = salty::signature::Keypair::from(&private_data);
-                let public_key = key.public.to_bytes();
+                let mut public_key = key.public.to_bytes();
+                public_key.reverse();
                 self.se
                     .run_command(
                         &WriteEcKey::builder()
@@ -2804,18 +2830,20 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     })?;
             }
             Mechanism::X255 => {
-                let private_data: [u8; 32] = (&**req.raw_key).try_into().map_err(|_| {
+                let mut private_data: [u8; 32] = (&**req.raw_key).try_into().map_err(|_| {
                     debug_now!("Raw key is too large");
                     Error::InvalidSerializedKey
                 })?;
 
                 let key = salty::agreement::SecretKey::from_seed(&private_data);
-                let public_key = key.public().to_bytes();
+                let mut public_key = key.public().to_bytes();
+                private_data.reverse();
+                public_key.reverse();
                 self.se
                     .run_command(
                         &WriteEcKey::builder()
                             .key_type(P1KeyType::KeyPair)
-                            .private_key(&req.raw_key)
+                            .private_key(&private_data)
                             .public_key(&public_key)
                             .policy(POLICY)
                             .curve(EcCurve::IdEccMontDh25519)
