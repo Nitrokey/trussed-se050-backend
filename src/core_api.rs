@@ -157,17 +157,6 @@ fn handle_rsa_import_format(data: &[u8], size: u16) -> Option<RsaImportElements>
     Some(RsaImportElements { e: parsed.e, d, n })
 }
 
-fn strip_0_prefix(data: &[u8]) -> &[u8] {
-    for (idx, b) in data.iter().enumerate() {
-        if *b == 0 {
-            continue;
-        } else {
-            return &data[idx..];
-        }
-    }
-    &[]
-}
-
 /// The SE050 doesn't expect pre-hashed data, but the RSA backend expects a prehashed DigestInf
 fn prepare_rsa_pkcs1v15(message: &[u8], keysize: usize) -> Result<Bytes<512>, Error> {
     let (keysize_bytes, max_len) = match (keysize, message.len()) {
@@ -1348,6 +1337,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         kind: Kind,
         rng: &mut R,
     ) -> Result<reply::Sign, Error> {
+        debug_now!("Sign volatile");
         let buf = &mut [0; BUFFER_LEN];
         let data = se050_keystore.load_key(Secrecy::Secret, Some(kind), &key_id)?;
         let data: VolatileRsaKey = cbor_deserialize(&data.material).or(Err(Error::CborError))?;
@@ -1370,14 +1360,15 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 debug!("Failed to authenticate session");
                 Error::FunctionFailed
             })?;
+        debug_now!("Data: {}", hexstr!(data_to_sign));
         let signature = self
             .se
             .run_session_command(
                 session_id,
-                &RsaEncrypt {
+                &RsaDecrypt {
                     key_id: object_id.key_id(),
                     algo: RsaEncryptionAlgo::NoPad,
-                    plaintext: data_to_sign,
+                    ciphertext: data_to_sign,
                 },
                 buf,
             )
@@ -1385,7 +1376,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 error_now!("Failed to sign {_err:?}");
                 Error::FunctionFailed
             })?
-            .ciphertext;
+            .plaintext;
         self.se
             .run_session_command(session_id, &CloseSession {}, &mut [0; 128])
             .map_err(|_err| {
@@ -1408,10 +1399,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let res = self
             .se
             .run_command(
-                &RsaEncrypt {
+                &RsaDecrypt {
                     key_id: id.0,
                     algo: RsaEncryptionAlgo::NoPad,
-                    plaintext: data,
+                    ciphertext: data,
                 },
                 buf,
             )
@@ -1420,7 +1411,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Error::FunctionFailed
             })?;
         Ok(reply::Sign {
-            signature: Bytes::from_slice(res.ciphertext).map_err(|_err| Error::FunctionFailed)?,
+            signature: Bytes::from_slice(res.plaintext).map_err(|_err| Error::FunctionFailed)?,
         })
     }
 
@@ -1449,7 +1440,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Kind::Rsa4096 => 4096,
             _ => unreachable!(),
         };
-        let message = prepare_rsa_pkcs1v15(&req.message[19..], keysize)?;
+        let message = prepare_rsa_pkcs1v15(&req.message, keysize)?;
 
         match key_id {
             ParsedObjectId::VolatileRsaKey(key) => {
@@ -2447,6 +2438,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         rng: &mut R,
         ns: NamespaceValue,
     ) -> Result<reply::UnsafeInjectKey, Error> {
+        let keysize_bytes = (size / 8) as usize;
         assert!(matches!(
             kind,
             Kind::Rsa2048 | Kind::Rsa3072 | Kind::Rsa4096
@@ -2525,7 +2517,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     .key_type(P1KeyType::Na)
                     .key_format(RsaFormat::Raw)
                     .object_id(se_id.key_id())
-                    .d(strip_0_prefix(&parsed.d))
+                    .d(&parsed.d[RSA_ARR_SIZE - keysize_bytes..])
                     .build(),
                 buf,
             )
@@ -2539,7 +2531,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     .key_type(P1KeyType::Na)
                     .key_format(RsaFormat::Raw)
                     .object_id(se_id.key_id())
-                    .n(strip_0_prefix(&parsed.n))
+                    .n(&parsed.n[RSA_ARR_SIZE - keysize_bytes..])
                     .build(),
                 buf,
             )
@@ -2728,6 +2720,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         size: u16,
     ) -> Result<(), Error> {
         let buf = &mut [0; 128];
+        let keysize_bytes = (size / 8) as usize;
         let parsed =
             handle_rsa_import_format(&req.raw_key, size).ok_or(Error::InvalidSerializedKey)?;
         self.se
@@ -2751,7 +2744,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     .key_type(P1KeyType::KeyPair)
                     .key_format(RsaFormat::Raw)
                     .object_id(*id)
-                    .d(strip_0_prefix(&parsed.d))
+                    .d(&parsed.d[RSA_ARR_SIZE - keysize_bytes..])
                     .build(),
                 buf,
             )
@@ -2765,7 +2758,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     .key_type(P1KeyType::KeyPair)
                     .key_format(RsaFormat::Raw)
                     .object_id(*id)
-                    .n(strip_0_prefix(&parsed.n))
+                    .n(&parsed.n[RSA_ARR_SIZE - keysize_bytes..])
                     .build(),
                 buf,
             )
