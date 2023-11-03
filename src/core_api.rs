@@ -14,8 +14,8 @@ use se05x::{
         commands::{
             CheckObjectExists, CloseSession, CreateSession, DeleteSecureObject,
             EcdhGenerateSharedSecret, EcdsaSign, EcdsaVerify, EddsaSign, EddsaVerify, ExportObject,
-            GetRandom, ImportObject, ReadIdList, ReadObject, RsaDecrypt, RsaEncrypt, RsaSign,
-            RsaVerify, VerifySessionUserId, WriteEcKey, WriteRsaKey, WriteSymmKey, WriteUserId,
+            GetRandom, ImportObject, ReadIdList, ReadObject, RsaDecrypt, RsaEncrypt, RsaVerify,
+            VerifySessionUserId, WriteEcKey, WriteRsaKey, WriteSymmKey, WriteUserId,
         },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
         EcCurve, EcDsaSignatureAlgo, ObjectId, P1KeyType, RsaEncryptionAlgo, RsaFormat,
