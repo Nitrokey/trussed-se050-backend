@@ -1731,13 +1731,24 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 error_now!("Failed to write EC public key: {_err:?}");
                 Error::FunctionFailed
             })?;
+
+        let Ok(mut signature): Result<[u8; 64], _> = (&**req.signature).try_into() else {
+            warn_now!(
+                "Got Ed25519 signature that is not 64 bytes: {}",
+                req.signature.len()
+            );
+            return Err(Error::WrongSignatureLength);
+        };
+        signature[..32].reverse();
+        signature[32..].reverse();
+
         let res = self
             .se
             .run_command(
                 &EddsaVerify::builder()
                     .key_id(id)
                     .data(&req.message)
-                    .signature(&req.signature)
+                    .signature(&signature)
                     .build(),
                 buf,
             )
