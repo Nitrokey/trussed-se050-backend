@@ -1822,7 +1822,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let expected_raw_text = prepare_rsa_pkcs1v15(&req.message, size.into())?;
 
         let ret = reply::Verify {
-            valid: expected_raw_text.ct_eq(&encrypted_signature).into(),
+            valid: expected_raw_text.ct_eq(encrypted_signature).into(),
         };
         self.se
             .run_command(&DeleteSecureObject { object_id: id }, buf)
@@ -2524,7 +2524,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     .object_id(se_id.key_id())
                     .key_size(size.into())
                     .policy(PolicySet(&policy_for_key(se_id.intermediary_key_id())))
-                    .e(&parsed.e)
+                    .e(parsed.e)
                     .build(),
                 buf,
             )
@@ -3096,9 +3096,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
         request: &Request,
         resources: &mut trussed::service::ServiceResources<P>,
     ) -> Result<trussed::Reply, Error> {
-        // debug_now!("Got request: {request:?}");
-        let res = self.core_request_internal(core_ctx, backend_ctx, request, resources);
-        // debug_now!("Got res: {res:?}");
-        res
+        self.core_request_internal(core_ctx, backend_ctx, request, resources)
     }
 }
