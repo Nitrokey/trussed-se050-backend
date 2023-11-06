@@ -2,7 +2,7 @@
 
 use cbor_smol::{cbor_deserialize, cbor_serialize};
 use crypto_bigint::{
-    subtle::{ConstantTimeGreater, CtOption},
+    subtle::{ConstantTimeEq, ConstantTimeGreater, CtOption},
     Checked, CtChoice, Encoding, U4096,
 };
 use embedded_hal::blocking::delay::DelayUs;
@@ -14,12 +14,12 @@ use se05x::{
         commands::{
             CheckObjectExists, CloseSession, CreateSession, DeleteSecureObject,
             EcdhGenerateSharedSecret, EcdsaSign, EcdsaVerify, EddsaSign, EddsaVerify, ExportObject,
-            GetRandom, ImportObject, ReadIdList, ReadObject, RsaDecrypt, RsaEncrypt, RsaVerify,
+            GetRandom, ImportObject, ReadIdList, ReadObject, RsaDecrypt, RsaEncrypt,
             VerifySessionUserId, WriteEcKey, WriteRsaKey, WriteSymmKey, WriteUserId,
         },
         policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet},
         EcCurve, EcDsaSignatureAlgo, ObjectId, P1KeyType, RsaEncryptionAlgo, RsaFormat,
-        RsaKeyComponent, RsaSignatureAlgo, Se05XResult, SecureObjectFilter, SymmKeyType,
+        RsaKeyComponent, Se05XResult, SecureObjectFilter, SymmKeyType,
     },
     t1::I2CForT1,
 };
@@ -1601,33 +1601,15 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 ns,
                 rng,
             ),
-            Mechanism::Rsa2048Pkcs1v15 => self.verify_rsa(
-                req,
-                core_keystore,
-                Kind::Rsa2048,
-                RsaSignatureAlgo::RsaSha256Pkcs1,
-                2048,
-                ns,
-                rng,
-            ),
-            Mechanism::Rsa3072Pkcs1v15 => self.verify_rsa(
-                req,
-                core_keystore,
-                Kind::Rsa3072,
-                RsaSignatureAlgo::RsaSha384Pkcs1,
-                3072,
-                ns,
-                rng,
-            ),
-            Mechanism::Rsa4096Pkcs1v15 => self.verify_rsa(
-                req,
-                core_keystore,
-                Kind::Rsa4096,
-                RsaSignatureAlgo::RsaSha512Pkcs1,
-                4096,
-                ns,
-                rng,
-            ),
+            Mechanism::Rsa2048Pkcs1v15 => {
+                self.verify_rsa(req, core_keystore, Kind::Rsa2048, 2048, ns, rng)
+            }
+            Mechanism::Rsa3072Pkcs1v15 => {
+                self.verify_rsa(req, core_keystore, Kind::Rsa3072, 3072, ns, rng)
+            }
+            Mechanism::Rsa4096Pkcs1v15 => {
+                self.verify_rsa(req, core_keystore, Kind::Rsa4096, 4096, ns, rng)
+            }
             // We don't support `raw` as it is done through encrypt/decrypt anyway
             // This is an incompatiblity with trussed-rsa-alloc
             _ => Err(Error::MechanismParamInvalid),
@@ -1774,7 +1756,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         req: &request::Verify,
         core_keystore: &mut impl Keystore,
         kind: Kind,
-        algo: RsaSignatureAlgo,
         size: u16,
         ns: NamespaceValue,
         rng: &mut R,
@@ -1817,24 +1798,31 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Error::FunctionFailed
             })?;
 
-        let res = self
+        if !matches!(
+            (kind, req.signature.len()),
+            (Kind::Rsa2048, 256) | (Kind::Rsa3072, 384) | (Kind::Rsa4096, 512)
+        ) {
+            return Err(Error::WrongMessageLength);
+        }
+        let encrypted_signature = self
             .se
             .run_command(
-                &RsaVerify::builder()
+                &RsaEncrypt::builder()
                     .key_id(id)
-                    .algo(algo)
-                    .data(&req.message)
-                    .signature(&req.signature)
+                    .algo(RsaEncryptionAlgo::NoPad)
+                    .plaintext(&req.signature)
                     .build(),
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to verify: {_err:?}");
+                error_now!("Failed to encrypt signature: {_err:?}");
                 Error::FunctionFailed
-            })?;
+            })?
+            .ciphertext;
+        let expected_raw_text = prepare_rsa_pkcs1v15(&req.message, size.into())?;
 
         let ret = reply::Verify {
-            valid: res.result == Se05XResult::Success,
+            valid: expected_raw_text.ct_eq(&encrypted_signature).into(),
         };
         self.se
             .run_command(&DeleteSecureObject { object_id: id }, buf)
