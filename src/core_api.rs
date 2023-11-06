@@ -29,8 +29,8 @@ use trussed::{
     backend::Backend,
     config::MAX_MESSAGE_LENGTH,
     key::{self, Kind, Secrecy},
-    service::Keystore,
-    types::{KeyId, KeySerialization, Location, Mechanism, Message},
+    service::{Keystore, ServiceResources},
+    types::{CoreContext, KeyId, KeySerialization, Location, Mechanism, Message},
     Bytes, Error,
 };
 use trussed_rsa_alloc::{RsaImportFormat, RsaPublicParts};
@@ -423,12 +423,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         })
     }
 
-    fn derive_key<R: CryptoRng + RngCore>(
+    fn derive_key(
         &mut self,
         req: &request::DeriveKey,
         core_keystore: &mut impl Keystore,
         se050_keystore: &mut impl Keystore,
-        rng: &mut R,
         ns: NamespaceValue,
     ) -> Result<reply::DeriveKey, Error> {
         if req.additional_data.is_some() {
@@ -446,15 +445,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             ParsedObjectId::VolatileKey(k) => {
                 self.derive_volatile_key(req, k.0, parsed_ty, core_keystore, se050_keystore, ns)
             }
-            ParsedObjectId::VolatileRsaKey(k) => self.derive_volatile_rsa_key(
-                req,
-                k,
-                parsed_ty,
-                core_keystore,
-                se050_keystore,
-                ns,
-                rng,
-            ),
+            ParsedObjectId::VolatileRsaKey(k) => {
+                self.derive_volatile_rsa_key(req, k, parsed_ty, core_keystore, se050_keystore, ns)
+            }
         }
     }
 
@@ -644,7 +637,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(reply::DeriveKey { key })
     }
 
-    fn derive_volatile_rsa_key<R: CryptoRng + RngCore>(
+    fn derive_volatile_rsa_key(
         &mut self,
         req: &request::DeriveKey,
         key: VolatileRsaObjectId,
@@ -652,7 +645,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         core_keystore: &mut impl Keystore,
         se050_keystore: &mut impl Keystore,
         _ns: NamespaceValue,
-        rng: &mut R,
     ) -> Result<reply::DeriveKey, Error> {
         let kind = match ty {
             KeyType::Rsa2048 => Kind::Rsa2048,
@@ -682,7 +674,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             })?
             .session_id;
         self.se
-            .authenticate_aes128_session(session_id, &data.intermediary_key, rng)
+            .authenticate_aes128_session(session_id, &data.intermediary_key, se050_keystore.rng())
             .map_err(|_err| {
                 debug!("Failed to authenticate session");
                 Error::FunctionFailed
@@ -740,26 +732,26 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(reply::DeriveKey { key })
     }
 
-    fn generate_key<R: CryptoRng + RngCore>(
+    fn generate_key(
         &mut self,
         req: &request::GenerateKey,
         se050_keystore: &mut impl Keystore,
-        rng: &mut R,
         ns: NamespaceValue,
     ) -> Result<reply::GenerateKey, Error> {
         match req.attributes.persistence {
-            Location::Volatile => self.generate_volatile_key(req, se050_keystore, rng, ns),
-            Location::Internal | Location::External => self.generate_persistent_key(req, rng, ns),
+            Location::Volatile => self.generate_volatile_key(req, se050_keystore, ns),
+            Location::Internal | Location::External => {
+                self.generate_persistent_key(req, se050_keystore.rng(), ns)
+            }
         }
     }
 
-    fn generate_volatile_rsa_key<R: CryptoRng + RngCore>(
+    fn generate_volatile_rsa_key(
         &mut self,
         se050_keystore: &mut impl Keystore,
         size: u16,
         kind: Kind,
         ty: KeyType,
-        rng: &mut R,
         ns: NamespaceValue,
     ) -> Result<reply::GenerateKey, Error> {
         assert!(matches!(
@@ -767,7 +759,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Kind::Rsa2048 | Kind::Rsa3072 | Kind::Rsa4096
         ));
         let buf = &mut [0; 1024];
-        let se_id = VolatileRsaObjectId::new(rng, ns);
+        let se_id = VolatileRsaObjectId::new(se050_keystore.rng(), ns);
 
         fn policy_for_intermediary(real_key: ObjectId) -> [Policy; 1] {
             [Policy {
@@ -847,11 +839,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(reply::GenerateKey { key })
     }
 
-    fn generate_volatile_key<R: CryptoRng + RngCore>(
+    fn generate_volatile_key(
         &mut self,
         req: &request::GenerateKey,
         se050_keystore: &mut impl Keystore,
-        rng: &mut R,
         ns: NamespaceValue,
     ) -> Result<reply::GenerateKey, Error> {
         let (kind, ty) = match req.mechanism {
@@ -864,7 +855,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     2048,
                     Kind::Rsa2048,
                     KeyType::Rsa2048,
-                    rng,
                     ns,
                 );
             }
@@ -874,7 +864,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     3072,
                     Kind::Rsa3072,
                     KeyType::Rsa3072,
-                    rng,
                     ns,
                 );
             }
@@ -884,7 +873,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     4096,
                     Kind::Rsa4096,
                     KeyType::Rsa4096,
-                    rng,
                     ns,
                 );
             }
@@ -893,7 +881,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         };
 
         let buf = &mut [0; 1024];
-        let object_id = VolatileObjectId::new(rng, ns);
+        let object_id = VolatileObjectId::new(se050_keystore.rng(), ns);
 
         match req.mechanism {
             Mechanism::Ed255 => self
@@ -1101,7 +1089,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         })
     }
 
-    fn rsa_decrypt_volatile<R: CryptoRng + RngCore>(
+    fn rsa_decrypt_volatile(
         &mut self,
         key_id: KeyId,
         object_id: VolatileRsaObjectId,
@@ -1109,7 +1097,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         se050_keystore: &mut impl Keystore,
         algo: RsaEncryptionAlgo,
         kind: Kind,
-        rng: &mut R,
     ) -> Result<reply::Decrypt, Error> {
         let buf = &mut [0; BUFFER_LEN];
         let data = se050_keystore.load_key(Secrecy::Secret, Some(kind), &key_id)?;
@@ -1128,7 +1115,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             })?
             .session_id;
         self.se
-            .authenticate_aes128_session(session_id, &data.intermediary_key, rng)
+            .authenticate_aes128_session(session_id, &data.intermediary_key, se050_keystore.rng())
             .map_err(|_err| {
                 debug!("Failed to authenticate session");
                 Error::FunctionFailed
@@ -1189,12 +1176,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         })
     }
 
-    fn decrypt<R: CryptoRng + RngCore>(
+    fn decrypt(
         &mut self,
         req: &request::Decrypt,
         se050_keystore: &mut impl Keystore,
         ns: NamespaceValue,
-        rng: &mut R,
     ) -> Result<reply::Decrypt, Error> {
         let (_bits, kind, raw) = bits_and_kind_from_mechanism(req.mechanism)?;
         let (key_id, key_type) = parse_key_id(req.key, ns).ok_or(Error::RequestNotAvailable)?;
@@ -1214,15 +1200,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         };
 
         match key_id {
-            ParsedObjectId::VolatileRsaKey(key) => self.rsa_decrypt_volatile(
-                req.key,
-                key,
-                &req.message,
-                se050_keystore,
-                algo,
-                kind,
-                rng,
-            ),
+            ParsedObjectId::VolatileRsaKey(key) => {
+                self.rsa_decrypt_volatile(req.key, key, &req.message, se050_keystore, algo, kind)
+            }
             ParsedObjectId::PersistentKey(key) => {
                 self.rsa_decrypt_persistent(key, &req.message, algo)
             }
@@ -1230,12 +1210,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         }
     }
 
-    fn encrypt<R: CryptoRng + RngCore>(
+    fn encrypt(
         &mut self,
         req: &request::Encrypt,
         core_keystore: &mut impl Keystore,
         ns: NamespaceValue,
-        rng: &mut R,
     ) -> Result<reply::Encrypt, Error> {
         let (kind, algo, size) = match req.mechanism {
             Mechanism::Rsa2048Pkcs1v15 => (Kind::Rsa2048, RsaEncryptionAlgo::Pkcs1, 2048),
@@ -1258,7 +1237,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         })?;
 
         let buf = &mut [0; 1024];
-        let id = generate_object_id_ns(rng, ns, ObjectKind::PublicTemporary);
+        let id = generate_object_id_ns(core_keystore.rng(), ns, ObjectKind::PublicTemporary);
 
         self.se
             .run_command(
@@ -1314,12 +1293,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(ret)
     }
 
-    fn sign<R: CryptoRng + RngCore>(
+    fn sign(
         &mut self,
         req: &request::Sign,
         se050_keystore: &mut impl Keystore,
         ns: NamespaceValue,
-        rng: &mut R,
     ) -> Result<reply::Sign, Error> {
         match req.mechanism {
             Mechanism::P256 => {
@@ -1330,21 +1308,20 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Mechanism::Ed255 => self.sign_eddsa(req, se050_keystore, ns),
             Mechanism::Rsa2048Pkcs1v15
             | Mechanism::Rsa3072Pkcs1v15
-            | Mechanism::Rsa4096Pkcs1v15 => self.rsa_sign(req, se050_keystore, ns, rng),
+            | Mechanism::Rsa4096Pkcs1v15 => self.rsa_sign(req, se050_keystore, ns),
             // We don't support `raw` as it is done through encrypt/decrypt anyway
             // This is an incompatiblity with trussed-rsa-alloc
             _ => Err(Error::MechanismParamInvalid),
         }
     }
 
-    fn rsa_sign_volatile<R: CryptoRng + RngCore>(
+    fn rsa_sign_volatile(
         &mut self,
         key_id: KeyId,
         object_id: VolatileRsaObjectId,
         data_to_sign: &[u8],
         se050_keystore: &mut impl Keystore,
         kind: Kind,
-        rng: &mut R,
     ) -> Result<reply::Sign, Error> {
         debug_now!("Sign volatile");
         let buf = &mut [0; BUFFER_LEN];
@@ -1364,7 +1341,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             })?
             .session_id;
         self.se
-            .authenticate_aes128_session(session_id, &data.intermediary_key, rng)
+            .authenticate_aes128_session(session_id, &data.intermediary_key, se050_keystore.rng())
             .map_err(|_err| {
                 debug!("Failed to authenticate session");
                 Error::FunctionFailed
@@ -1424,12 +1401,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         })
     }
 
-    fn rsa_sign<R: CryptoRng + RngCore>(
+    fn rsa_sign(
         &mut self,
         req: &request::Sign,
         se050_keystore: &mut impl Keystore,
         ns: NamespaceValue,
-        rng: &mut R,
     ) -> Result<reply::Sign, Error> {
         let (_bits, kind, _) = bits_and_kind_from_mechanism(req.mechanism)?;
         let (key_id, key_type) = parse_key_id(req.key, ns).ok_or(Error::RequestNotAvailable)?;
@@ -1453,7 +1429,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
         match key_id {
             ParsedObjectId::VolatileRsaKey(key) => {
-                self.rsa_sign_volatile(req.key, key, &message, se050_keystore, kind, rng)
+                self.rsa_sign_volatile(req.key, key, &message, se050_keystore, kind)
             }
             ParsedObjectId::PersistentKey(key) => self.rsa_sign_persistent(key, &message),
             _ => Err(Error::ObjectHandleInvalid),
@@ -1572,12 +1548,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(reply::Sign { signature })
     }
 
-    fn verify<R: CryptoRng + RngCore>(
+    fn verify(
         &mut self,
         req: &request::Verify,
         core_keystore: &mut impl Keystore,
         ns: NamespaceValue,
-        rng: &mut R,
     ) -> Result<reply::Verify, Error> {
         match req.mechanism {
             Mechanism::P256 => {
@@ -1591,24 +1566,18 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 EcDsaSignatureAlgo::Sha256,
                 core_keystore,
                 ns,
-                rng,
             ),
-            Mechanism::Ed255 => self.verify_eddsa(
-                req,
-                Kind::Ed255,
-                EcCurve::IdEccEd25519,
-                core_keystore,
-                ns,
-                rng,
-            ),
+            Mechanism::Ed255 => {
+                self.verify_eddsa(req, Kind::Ed255, EcCurve::IdEccEd25519, core_keystore, ns)
+            }
             Mechanism::Rsa2048Pkcs1v15 => {
-                self.verify_rsa(req, core_keystore, Kind::Rsa2048, 2048, ns, rng)
+                self.verify_rsa(req, core_keystore, Kind::Rsa2048, 2048, ns)
             }
             Mechanism::Rsa3072Pkcs1v15 => {
-                self.verify_rsa(req, core_keystore, Kind::Rsa3072, 3072, ns, rng)
+                self.verify_rsa(req, core_keystore, Kind::Rsa3072, 3072, ns)
             }
             Mechanism::Rsa4096Pkcs1v15 => {
-                self.verify_rsa(req, core_keystore, Kind::Rsa4096, 4096, ns, rng)
+                self.verify_rsa(req, core_keystore, Kind::Rsa4096, 4096, ns)
             }
             // We don't support `raw` as it is done through encrypt/decrypt anyway
             // This is an incompatiblity with trussed-rsa-alloc
@@ -1616,7 +1585,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         }
     }
 
-    fn verify_ecdsa_prehashed<R: CryptoRng + RngCore>(
+    fn verify_ecdsa_prehashed(
         &mut self,
         req: &request::Verify,
         kind: Kind,
@@ -1624,7 +1593,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         algo: EcDsaSignatureAlgo,
         core_keystore: &mut impl Keystore,
         ns: NamespaceValue,
-        rng: &mut R,
     ) -> Result<reply::Verify, Error> {
         let material = core_keystore
             .load_key(Secrecy::Public, Some(kind), &req.key)
@@ -1633,7 +1601,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 err
             })?;
         let buf = &mut [0; 1024];
-        let id = generate_object_id_ns(rng, ns, ObjectKind::PublicTemporary);
+        let id = generate_object_id_ns(core_keystore.rng(), ns, ObjectKind::PublicTemporary);
 
         let signature = p256::ecdsa::Signature::from_slice(&req.signature).map_err(|_err| {
             error_now!("Failed to parse request signature: {_err:?}");
@@ -1682,14 +1650,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(ret)
     }
 
-    fn verify_eddsa<R: CryptoRng + RngCore>(
+    fn verify_eddsa(
         &mut self,
         req: &request::Verify,
         kind: Kind,
         curve: EcCurve,
         core_keystore: &mut impl Keystore,
         ns: NamespaceValue,
-        rng: &mut R,
     ) -> Result<reply::Verify, Error> {
         let material = core_keystore
             .load_key(Secrecy::Public, Some(kind), &req.key)
@@ -1698,7 +1665,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 err
             })?;
         let buf = &mut [0; 1024];
-        let id = generate_object_id_ns(rng, ns, ObjectKind::PublicTemporary);
+        let id = generate_object_id_ns(core_keystore.rng(), ns, ObjectKind::PublicTemporary);
         self.se
             .run_command(
                 &WriteEcKey::builder()
@@ -1751,14 +1718,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(ret)
     }
 
-    fn verify_rsa<R: CryptoRng + RngCore>(
+    fn verify_rsa(
         &mut self,
         req: &request::Verify,
         core_keystore: &mut impl Keystore,
         kind: Kind,
         size: u16,
         ns: NamespaceValue,
-        rng: &mut R,
     ) -> Result<reply::Verify, Error> {
         let material = core_keystore
             .load_key(Secrecy::Public, Some(kind), &req.key)
@@ -1772,7 +1738,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         })?;
 
         let buf = &mut [0; 1024];
-        let id = generate_object_id_ns(rng, ns, ObjectKind::PublicTemporary);
+        let id = generate_object_id_ns(core_keystore.rng(), ns, ObjectKind::PublicTemporary);
 
         self.se
             .run_command(
@@ -2449,14 +2415,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         })
     }
 
-    fn unsafe_inject_volatile_rsa<R: CryptoRng + RngCore>(
+    fn unsafe_inject_volatile_rsa(
         &mut self,
         req: &request::UnsafeInjectKey,
         se050_keystore: &mut impl Keystore,
         size: u16,
         kind: Kind,
         ty: KeyType,
-        rng: &mut R,
         ns: NamespaceValue,
     ) -> Result<reply::UnsafeInjectKey, Error> {
         let keysize_bytes = (size / 8) as usize;
@@ -2465,7 +2430,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Kind::Rsa2048 | Kind::Rsa3072 | Kind::Rsa4096
         ));
         let buf = &mut [0; 1024];
-        let se_id = VolatileRsaObjectId::new(rng, ns);
+        let se_id = VolatileRsaObjectId::new(se050_keystore.rng(), ns);
         fn policy_for_intermediary(real_key: ObjectId) -> [Policy; 1] {
             [Policy {
                 object_id: real_key,
@@ -2580,11 +2545,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(reply::UnsafeInjectKey { key })
     }
 
-    fn unsafe_inject_volatile<R: CryptoRng + RngCore>(
+    fn unsafe_inject_volatile(
         &mut self,
         req: &request::UnsafeInjectKey,
         se050_keystore: &mut impl Keystore,
-        rng: &mut R,
         ns: NamespaceValue,
     ) -> Result<reply::UnsafeInjectKey, Error> {
         let (kind, ty) = match req.mechanism {
@@ -2598,7 +2562,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     2048,
                     Kind::Rsa2048,
                     KeyType::Rsa2048,
-                    rng,
                     ns,
                 );
             }
@@ -2609,7 +2572,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     3072,
                     Kind::Rsa3072,
                     KeyType::Rsa3072,
-                    rng,
                     ns,
                 );
             }
@@ -2620,7 +2582,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     4096,
                     Kind::Rsa4096,
                     KeyType::Rsa4096,
-                    rng,
                     ns,
                 );
             }
@@ -2628,7 +2589,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             _ => unreachable!(),
         };
         let buf = &mut [0; 1024];
-        let id = VolatileObjectId::new(rng, ns);
+        let id = VolatileObjectId::new(se050_keystore.rng(), ns);
 
         match req.mechanism {
             Mechanism::Ed255 => {
@@ -2910,11 +2871,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         })
     }
 
-    fn unsafe_inject_key<R: CryptoRng + RngCore>(
+    fn unsafe_inject_key(
         &mut self,
         req: &request::UnsafeInjectKey,
         se050_keystore: &mut impl Keystore,
-        rng: &mut R,
         ns: NamespaceValue,
     ) -> Result<reply::UnsafeInjectKey, Error> {
         match (req.mechanism, req.format) {
@@ -2934,8 +2894,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             _ => return Err(Error::InvalidSerializationFormat),
         }
         match req.attributes.persistence {
-            Location::Volatile => self.unsafe_inject_volatile(req, se050_keystore, rng, ns),
-            Location::Internal | Location::External => self.unsafe_inject_persistent(req, rng, ns),
+            Location::Volatile => self.unsafe_inject_volatile(req, se050_keystore, ns),
+            Location::Internal | Location::External => {
+                self.unsafe_inject_persistent(req, se050_keystore.rng(), ns)
+            }
         }
     }
 }
@@ -3014,10 +2976,10 @@ fn supported(mechanism: Mechanism) -> bool {
 impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     fn core_request_internal<P: trussed::Platform>(
         &mut self,
-        core_ctx: &mut trussed::types::CoreContext,
+        core_ctx: &mut CoreContext,
         backend_ctx: &mut Context,
         request: &Request,
-        resources: &mut trussed::service::ServiceResources<P>,
+        resources: &mut ServiceResources<P>,
     ) -> Result<trussed::Reply, Error> {
         self.configure()?;
 
@@ -3025,61 +2987,94 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let mut backend_path = core_ctx.path.clone();
         backend_path.push(&PathBuf::from(BACKEND_DIR));
         backend_path.push(&PathBuf::from(CORE_DIR));
-        let rng = &mut resources.rng()?;
 
-        let se050_keystore = &mut resources.keystore(backend_path)?;
-        let core_keystore = &mut resources.keystore(core_ctx.path.clone())?;
+        // Used to ensure that the keystore is only created once.
+        // Keystore creation is expensive because it forks the rng.
+        let assert_once: [Request; 0] = [];
+        // Create the keystore lazily
+        let core_keystore = move |resources: &mut ServiceResources<P>,
+                                  core_ctx: &mut CoreContext| {
+            drop(assert_once);
+            resources.keystore(core_ctx.path.clone())
+        };
+        let se050_keystore =
+            move |resources: &mut ServiceResources<P>| resources.keystore(backend_path);
 
         let backend_ctx = backend_ctx.with_namespace(&self.ns, &core_ctx.path);
         let ns = backend_ctx.ns;
 
         Ok(match request {
             Request::RandomBytes(request::RandomBytes { count }) => self.random_bytes(*count)?,
-            Request::Agree(req) if supported(req.mechanism) => {
-                self.agree(req, core_keystore, se050_keystore, ns)?.into()
-            }
-            Request::Decrypt(req) if supported(req.mechanism) => {
-                self.decrypt(req, se050_keystore, ns, rng)?.into()
-            }
+            Request::Agree(req) if supported(req.mechanism) => self
+                .agree(
+                    req,
+                    &mut core_keystore(resources, core_ctx)?,
+                    &mut se050_keystore(resources)?,
+                    ns,
+                )?
+                .into(),
+            Request::Decrypt(req) if supported(req.mechanism) => self
+                .decrypt(req, &mut se050_keystore(resources)?, ns)?
+                .into(),
             Request::DeriveKey(req) if supported(req.mechanism) => self
-                .derive_key(req, core_keystore, se050_keystore, rng, ns)?
+                .derive_key(
+                    req,
+                    &mut core_keystore(resources, core_ctx)?,
+                    &mut se050_keystore(resources)?,
+                    ns,
+                )?
                 .into(),
-            Request::Encrypt(req) if supported(req.mechanism) => {
-                self.encrypt(req, core_keystore, ns, rng)?.into()
-            }
-            Request::DeserializeKey(req) if supported(req.mechanism) => {
-                self.deserialize_key(req, core_keystore)?.into()
-            }
-            Request::SerializeKey(req) if supported(req.mechanism) => {
-                self.serialize_key(req, core_keystore)?.into()
-            }
-            Request::Delete(request::Delete { key }) => {
-                self.delete(key, ns, se050_keystore)?.into()
-            }
-            Request::Clear(req) => self.clear(req, se050_keystore, ns)?.into(),
+            Request::Encrypt(req) if supported(req.mechanism) => self
+                .encrypt(req, &mut core_keystore(resources, core_ctx)?, ns)?
+                .into(),
+            Request::DeserializeKey(req) if supported(req.mechanism) => self
+                .deserialize_key(req, &mut core_keystore(resources, core_ctx)?)?
+                .into(),
+            Request::SerializeKey(req) if supported(req.mechanism) => self
+                .serialize_key(req, &mut core_keystore(resources, core_ctx)?)?
+                .into(),
+            Request::Delete(request::Delete { key }) => self
+                .delete(key, ns, &mut se050_keystore(resources)?)?
+                .into(),
+            Request::Clear(req) => self.clear(req, &mut se050_keystore(resources)?, ns)?.into(),
             Request::DeleteAllKeys(req) => self
-                .delete_all_keys(req, core_keystore, se050_keystore, ns)?
+                .delete_all_keys(
+                    req,
+                    &mut core_keystore(resources, core_ctx)?,
+                    &mut se050_keystore(resources)?,
+                    ns,
+                )?
                 .into(),
-            Request::Exists(req) if supported(req.mechanism) => {
-                self.exists(req, se050_keystore, ns)?.into()
-            }
-            Request::GenerateKey(req) if supported(req.mechanism) => {
-                self.generate_key(req, se050_keystore, rng, ns)?.into()
-            }
+            Request::Exists(req) if supported(req.mechanism) => self
+                .exists(req, &mut se050_keystore(resources)?, ns)?
+                .into(),
+            Request::GenerateKey(req) if supported(req.mechanism) => self
+                .generate_key(req, &mut se050_keystore(resources)?, ns)?
+                .into(),
             Request::Sign(req) if supported(req.mechanism) => {
-                self.sign(req, se050_keystore, ns, rng)?.into()
+                self.sign(req, &mut se050_keystore(resources)?, ns)?.into()
             }
-            Request::UnsafeInjectKey(req) if supported(req.mechanism) => {
-                self.unsafe_inject_key(req, se050_keystore, rng, ns)?.into()
-            }
-            Request::UnwrapKey(req) => self
-                .unwrap_key(req, core_keystore, se050_keystore, ns)?
+            Request::UnsafeInjectKey(req) if supported(req.mechanism) => self
+                .unsafe_inject_key(req, &mut se050_keystore(resources)?, ns)?
                 .into(),
-            Request::Verify(req) if supported(req.mechanism) => {
-                self.verify(req, core_keystore, ns, rng)?.into()
-            }
+            Request::UnwrapKey(req) => self
+                .unwrap_key(
+                    req,
+                    &mut core_keystore(resources, core_ctx)?,
+                    &mut se050_keystore(resources)?,
+                    ns,
+                )?
+                .into(),
+            Request::Verify(req) if supported(req.mechanism) => self
+                .verify(req, &mut core_keystore(resources, core_ctx)?, ns)?
+                .into(),
             Request::WrapKey(req) => self
-                .wrap_key(req, core_keystore, se050_keystore, ns)?
+                .wrap_key(
+                    req,
+                    &mut core_keystore(resources, core_ctx)?,
+                    &mut se050_keystore(resources)?,
+                    ns,
+                )?
                 .into(),
             _ => return Err(Error::RequestNotAvailable),
         })

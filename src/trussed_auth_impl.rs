@@ -274,7 +274,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
         backend_path.push(&PathBuf::from(AUTH_DIR));
         let fs = &mut resources.filestore(backend_path);
         let global_fs = &mut resources.filestore(PathBuf::from(BACKEND_DIR));
-        let rng = &mut resources.rng()?;
         let client_id = core_ctx.path.clone();
         let keystore = &mut resources.keystore(core_ctx.path.clone())?;
 
@@ -286,8 +285,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
             }
             AuthRequest::CheckPin(request) => {
                 let pin_data = PinData::load(request.id, fs, self.metadata_location)?;
-                let app_key = self.get_app_key(client_id, global_fs, auth_ctx, rng)?;
-                let success = pin_data.check(&request.pin, &app_key, &mut self.se, rng)?;
+                let app_key = self.get_app_key(client_id, global_fs, auth_ctx, keystore.rng())?;
+                let success =
+                    pin_data.check(&request.pin, &app_key, &mut self.se, keystore.rng())?;
                 Ok(reply::CheckPin { success }.into())
             }
             AuthRequest::GetPinKey(request) => {
@@ -296,8 +296,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                         debug!("Failed to get pin data: {_err:?}");
                         _err
                     })?;
-                let app_key = self.get_app_key(client_id, global_fs, auth_ctx, rng)?;
-                let key = pin_data.check_and_get_key(&request.pin, &app_key, &mut self.se, rng)?;
+                let app_key = self.get_app_key(client_id, global_fs, auth_ctx, keystore.rng())?;
+                let key = pin_data.check_and_get_key(
+                    &request.pin,
+                    &app_key,
+                    &mut self.se,
+                    keystore.rng(),
+                )?;
                 let Some(material) = key else {
                     return Ok(reply::GetPinKey { result: None }.into());
                 };
@@ -313,10 +318,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 .into())
             }
             AuthRequest::GetApplicationKey(request) => {
-                let salt = get_app_salt(fs, rng, self.metadata_location)?;
+                let salt = get_app_salt(fs, keystore.rng(), self.metadata_location)?;
                 let key = expand_app_key(
                     &salt,
-                    &self.get_app_key(client_id, global_fs, auth_ctx, rng)?,
+                    &self.get_app_key(client_id, global_fs, auth_ctx, keystore.rng())?,
                     &request.info,
                 );
                 let key_id = keystore.store_key(
@@ -331,8 +336,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 if fs.exists(&request.id.path(), self.metadata_location) {
                     return Err(trussed::Error::FunctionFailed);
                 }
-                let pin = PinData::new(request.id, ns, rng, request.derive_key);
-                let app_key = self.get_app_key(client_id, global_fs, auth_ctx, rng)?;
+                let pin = PinData::new(request.id, ns, keystore.rng(), request.derive_key);
+                let app_key = self.get_app_key(client_id, global_fs, auth_ctx, keystore.rng())?;
                 pin.create(
                     fs,
                     self.metadata_location,
@@ -345,7 +350,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 Ok(reply::SetPin {}.into())
             }
             AuthRequest::SetPinWithKey(request) => {
-                let app_key = self.get_app_key(client_id, global_fs, auth_ctx, rng)?;
+                let app_key = self.get_app_key(client_id, global_fs, auth_ctx, keystore.rng())?;
                 let key =
                     keystore.load_key(Secrecy::Secret, Some(Kind::Symmetric(32)), &request.key)?;
                 let key: Key = (&*key.material)
@@ -360,7 +365,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                     &app_key,
                     &request.pin,
                     request.retries,
-                    rng,
+                    keystore.rng(),
                     &key,
                     ns,
                 )?;
@@ -368,14 +373,14 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
             }
             AuthRequest::ChangePin(request) => {
                 let mut pin_data = PinData::load(request.id, fs, self.metadata_location)?;
-                let app_key = self.get_app_key(client_id, global_fs, auth_ctx, rng)?;
+                let app_key = self.get_app_key(client_id, global_fs, auth_ctx, keystore.rng())?;
                 let success = pin_data.update(
                     &mut self.se,
                     &app_key,
                     request,
                     fs,
                     self.metadata_location,
-                    rng,
+                    keystore.rng(),
                 )?;
                 Ok(reply::ChangePin { success }.into())
             }
@@ -392,7 +397,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 debug_now!("Getting pin retries");
                 let pin_data = PinData::load(request.id, fs, self.metadata_location)?;
                 debug_now!("Loaded {pin_data:?}");
-                let (attempts, max) = pin_data.get_attempts(&mut self.se, rng)?;
+                let (attempts, max) = pin_data.get_attempts(&mut self.se, keystore.rng())?;
                 debug_now!("Attempts: {attempts:?}, {max:?}");
                 Ok(reply::PinRetries {
                     retries: Some((max - attempts) as u8),
