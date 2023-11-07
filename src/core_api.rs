@@ -119,12 +119,12 @@ fn be_slice_to_bigint(data: &[u8]) -> Option<U4096> {
 fn handle_rsa_import_format(data: &[u8], size: u16) -> Option<RsaImportElements> {
     let parsed = RsaImportFormat::deserialize(data)
         .map_err(|_err| {
-            error_now!("Failed to parse rsa key");
+            error!("Failed to parse rsa key");
         })
         .ok()?;
     let e = be_slice_to_bigint(parsed.e)?;
     if e.bits() > size as usize {
-        warn_now!("Got too large e");
+        warn!("Got too large e");
         return None;
     }
 
@@ -169,7 +169,7 @@ fn prepare_rsa_pkcs1v15(message: &[u8], keysize: usize) -> Result<Bytes<512>, Er
         (3072, _) => (384, 154),
         (4096, _) => (512, 205),
         _ => {
-            error_now!("Got wrong message length: {}", message.len());
+            error!("Got wrong message length: {}", message.len());
             return Err(Error::SignDataTooLarge);
         }
     };
@@ -205,11 +205,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 &mut buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to get random: {:?}", _err);
+                error!("Failed to get random: {:?}", _err);
                 Error::FunctionFailed
             })?;
         if res.data.len() != count {
-            error_now!("Bad random length");
+            error!("Bad random length");
             return Err(Error::FunctionFailed);
         }
         Ok(reply::RandomBytes {
@@ -225,28 +225,21 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         se050_keystore: &mut impl Keystore,
     ) -> Result<reply::Delete, Error> {
         let (parsed_key, _parsed_ty) = parse_key_id(*key, ns).ok_or_else(|| {
-            debug_now!("Failed to parse key id");
+            debug!("Failed to parse key id");
             Error::RequestNotAvailable
         })?;
-        debug_now!("Deleting {key:?}, {_parsed_ty:?}");
+        debug!("Deleting {key:?}, {parsed_key:?}, {_parsed_ty:?}");
         match parsed_key {
             ParsedObjectId::Pin(_)
             | ParsedObjectId::PinWithDerived(_)
             | ParsedObjectId::SaltValue(_) => Err(Error::ObjectHandleInvalid),
             ParsedObjectId::PersistentKey(PersistentObjectId(obj)) => {
-                debug_now!("Deleting persistent {obj:?}");
                 self.delete_persistent_key(obj)
             }
             ParsedObjectId::VolatileKey(VolatileObjectId(obj)) => {
-                debug_now!("Deleting volatile {obj:?}");
                 self.delete_volatile_key(key, obj, se050_keystore)
             }
             ParsedObjectId::VolatileRsaKey(obj) => {
-                debug_now!(
-                    "Deleting volatile rsa {:?} {:?}",
-                    obj.key_id(),
-                    obj.intermediary_key_id()
-                );
                 self.delete_volatile_rsa_key(*key, obj, se050_keystore)
             }
         }
@@ -257,7 +250,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         self.se
             .run_command(&DeleteSecureObject { object_id }, buf)
             .map_err(|_err| {
-                debug_now!("Failed to delete key: {_err:?}");
+                warn!("Failed to delete key: {_err:?}");
                 Error::FunctionFailed
             })?;
         Ok(reply::Delete { success: true })
@@ -285,11 +278,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let mut count = 0;
         let buf = &mut [0; 1024];
 
-        debug_now!(
-            "Deleting volatile RSA key {:?} {:?}",
-            se_id.key_id(),
-            se_id.intermediary_key_id()
-        );
         let exists = self
             .se
             .run_command(
@@ -299,12 +287,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                debug_now!("Failed existence check: {_err:?}");
+                warn!("Failed existence check: {_err:?}");
                 Error::FunctionFailed
             })?
             .result;
         if exists.is_success() {
-            debug_now!("Deleting key");
+            debug!("Deleting key");
             self.se
                 .run_command(
                     &DeleteSecureObject {
@@ -313,7 +301,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     buf,
                 )
                 .map_err(|_err| {
-                    debug_now!("Failed deletion: {_err:?}");
+                    error!("Failed deletion: {_err:?}");
                     Error::FunctionFailed
                 })?;
             count += 1;
@@ -327,7 +315,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                debug_now!("Failed existence check: {_err:?}");
+                error!("Failed existence check: {_err:?}");
                 Error::FunctionFailed
             })?
             .result
@@ -336,7 +324,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             return Ok(count);
         }
 
-        debug_now!("Writing userid ");
+        debug!("Writing userid ");
         self.se
             .run_command(
                 &WriteUserId::builder()
@@ -353,7 +341,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 debug!("Failed WriteUserId: {_err:?}");
                 Error::FunctionFailed
             })?;
-        debug_now!("Creating session");
+        debug!("Creating session");
         let session_id = self
             .se
             .run_command(
@@ -367,7 +355,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Error::FunctionFailed
             })?
             .session_id;
-        debug_now!("Auth session");
+        debug!("Auth session");
         self.se
             .run_session_command(
                 session_id,
@@ -377,11 +365,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                debug_now!("Failed VerifySessionUserId: {_err:?}");
+                error!("Failed VerifySessionUserId: {_err:?}");
                 Error::FunctionFailed
             })?;
 
-        debug_now!("Deleting auth");
+        debug!("Deleting auth");
         self.se
             .run_session_command(
                 session_id,
@@ -391,17 +379,17 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                debug_now!("Failed to delete auth: {_err:?}");
+                error!("Failed to delete auth: {_err:?}");
                 Error::FunctionFailed
             })?;
-        debug_now!("Closing sess");
+        debug!("Closing sess");
         self.se
             .run_session_command(session_id, &CloseSession {}, buf)
             .map_err(|_err| {
                 debug!("Failed to close session: {_err:?}");
                 Error::FunctionFailed
             })?;
-        debug_now!("Deleting userid");
+        debug!("Deleting userid");
         self.se
             .run_command(
                 &DeleteSecureObject {
@@ -410,7 +398,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                debug_now!("Failed to delete user id: {_err:?}");
+                error!("Failed to delete user id: {_err:?}");
                 Error::FunctionFailed
             })?;
         Ok(count + 1)
@@ -441,7 +429,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let material = se050_keystore.load_key(Secrecy::Secret, Some(kind), &key)?;
         let parsed: VolatileKeyMaterialRef = trussed::cbor_deserialize(&material.material)
             .map_err(|_err| {
-                error_now!("Failed to parsed volatile key data: {_err:?}");
+                error!("Failed to parsed volatile key data: {_err:?}");
                 Error::CborError
             })?;
 
@@ -455,7 +443,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 &mut [0; 128],
             )
             .map_err(|_err| {
-                error_now!("Failed to re-import key:  {_err:?}");
+                error!("Failed to re-import key:  {_err:?}");
                 Error::FunctionFailed
             })?;
         Ok(())
@@ -506,7 +494,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     .se
                     .run_command(&ReadObject::builder().object_id(key).build(), buf)
                     .map_err(|_err| {
-                        error_now!("Failed to read key for derive: {_err:?}");
+                        error!("Failed to read key for derive: {_err:?}");
                         Error::FunctionFailed
                     })?;
                 assert_eq!(material.data.len(), 32);
@@ -524,12 +512,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     .se
                     .run_command(&ReadObject::builder().object_id(key).build(), buf)
                     .map_err(|_err| {
-                        error_now!("Failed to read key for derive: {_err:?}");
+                        error!("Failed to read key for derive: {_err:?}");
                         Error::FunctionFailed
                     })?;
                 assert_eq!(material.data.len(), 32);
-                debug_now!("Material: {material:02x?}");
-                debug_now!("Len: {}", material.data.len());
                 let result = core_keystore.store_key(
                     req.attributes.persistence,
                     Secrecy::Public,
@@ -544,11 +530,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     .se
                     .run_command(&ReadObject::builder().object_id(key).build(), buf)
                     .map_err(|_err| {
-                        error_now!("Failed to read key for derive: {_err:?}");
+                        error!("Failed to read key for derive: {_err:?}");
                         Error::FunctionFailed
                     })?;
-                debug_now!("Material: {material:02x?}");
-                debug_now!("Len: {}", material.data.len());
 
                 let result = core_keystore.store_key(
                     req.attributes.persistence,
@@ -589,7 +573,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to read RSA public key: {_err:?}");
+                error!("Failed to read RSA public key: {_err:?}");
                 Error::FunctionFailed
             })?
             .data;
@@ -604,7 +588,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to read RSA public key: {_err:?}");
+                error!("Failed to read RSA public key: {_err:?}");
                 Error::FunctionFailed
             })?
             .data;
@@ -662,7 +646,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let data = se050_keystore
             .load_key(Secrecy::Secret, Some(kind), &req.base_key)
             .map_err(|err| {
-                debug_now!("Failed to load RSA key: {err:?}");
+                error!("Failed to load RSA key: {err:?}");
                 err
             })?;
         let data: VolatileRsaKey = cbor_deserialize(&data.material).or(Err(Error::CborError))?;
@@ -697,7 +681,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to read RSA public key: {_err:?}");
+                error!("Failed to read RSA public key: {_err:?}");
                 Error::FunctionFailed
             })?
             .data;
@@ -713,7 +697,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to read RSA public key: {_err:?}");
+                error!("Failed to read RSA public key: {_err:?}");
                 Error::FunctionFailed
             })?
             .data;
@@ -732,7 +716,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         self.se
             .run_session_command(session_id, &CloseSession {}, &mut [0; 128])
             .map_err(|_err| {
-                error_now!("Failed to decrypt {_err:?}");
+                error!("Failed to decrypt {_err:?}");
                 Error::FunctionFailed
             })?;
 
@@ -842,7 +826,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             &key,
             key_material,
         )?;
-        debug_now!("Generated key: {key:?}");
+        debug!("Generated key: {key:?}");
         Ok(reply::GenerateKey { key })
     }
 
@@ -895,19 +879,15 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 .se
                 .run_command(&generate_ed255(object_id.0, true), buf)
                 .map_err(|_err| {
-                    error_now!("Failed to generate volatile key: {_err:?}");
-                    error_now!("Command: {:?}", generate_ed255(object_id.0, true));
+                    error!("Failed to generate volatile key: {_err:?}");
                     Error::FunctionFailed
                 })?,
             Mechanism::X255 => self
                 .se
                 .run_command(&generate_x255(object_id.0, true), buf)
                 .map_err(|_err| {
-                    // error_now!("Failed to generate volatile key: {_err:?}");
-                    error_now!(
-                        "Failed to generate volatile key: {_err:?}\nCommand: {:?}",
-                        generate_x255(object_id.0, true)
-                    );
+                    // error!("Failed to generate volatile key: {_err:?}");
+                    error!("Failed to generate volatile key: {_err:?}",);
                     Error::FunctionFailed
                 })?,
             // TODO First write curve somehow
@@ -915,8 +895,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 .se
                 .run_command(&generate_p256(object_id.0, true), buf)
                 .map_err(|_err| {
-                    error_now!("Failed to generate volatile key: {_err:?}");
-                    error_now!("Command: {:?}", generate_p256(object_id.0, true));
+                    error!("Failed to generate volatile key: {_err:?}");
                     Error::FunctionFailed
                 })?,
             _ => unreachable!(),
@@ -936,7 +915,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
         // Remove any data from the transient storage
         self.reselect()?;
-        debug_now!("Generated key: {key:?}");
+        debug!("Generated key: {key:?}");
         Ok(reply::GenerateKey { key })
     }
 
@@ -954,14 +933,14 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 .se
                 .run_command(&generate_ed255(object_id.0, false), buf)
                 .map_err(|_err| {
-                    error_now!("Failed to generate key: {_err:?}");
+                    error!("Failed to generate key: {_err:?}");
                     Error::FunctionFailed
                 })?,
             Mechanism::X255 => self
                 .se
                 .run_command(&generate_x255(object_id.0, false), buf)
                 .map_err(|_err| {
-                    error_now!("Failed to generate key: {_err:?}");
+                    error!("Failed to generate key: {_err:?}");
                     Error::FunctionFailed
                 })?,
 
@@ -970,7 +949,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 .se
                 .run_command(&generate_p256(object_id.0, false), buf)
                 .map_err(|_err| {
-                    error_now!("Failed to generate key: {_err:?}");
+                    error!("Failed to generate key: {_err:?}");
                     Error::FunctionFailed
                 })?,
             Mechanism::P256Prehashed => return Err(Error::MechanismParamInvalid),
@@ -978,21 +957,21 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 .se
                 .run_command(&generate_rsa(object_id.0, 2048), buf)
                 .map_err(|_err| {
-                    error_now!("Failed to generate key: {_err:?}");
+                    error!("Failed to generate key: {_err:?}");
                     Error::FunctionFailed
                 })?,
             Mechanism::Rsa3072Raw | Mechanism::Rsa3072Pkcs1v15 => self
                 .se
                 .run_command(&generate_rsa(object_id.0, 3072), buf)
                 .map_err(|_err| {
-                    error_now!("Failed to generate key: {_err:?}");
+                    error!("Failed to generate key: {_err:?}");
                     Error::FunctionFailed
                 })?,
             Mechanism::Rsa4096Raw | Mechanism::Rsa4096Pkcs1v15 => self
                 .se
                 .run_command(&generate_rsa(object_id.0, 4096), buf)
                 .map_err(|_err| {
-                    error_now!("Failed to generate key: {_err:?}");
+                    error!("Failed to generate key: {_err:?}");
                     Error::FunctionFailed
                 })?,
             // Other mechanisms are filtered through the `supported` function
@@ -1057,13 +1036,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                debug_now!("Failed to perform agree: {_err:?}");
+                error!("Failed to perform agree: {_err:?}");
                 Error::FunctionFailed
             })?
             .shared_secret;
         if matches!(req.mechanism, Mechanism::X255) {
             let Ok(mut tmp): Result<[u8; 32], _> = shared_secret.try_into() else {
-                debug_now!("Shared secret for X255 is not 32 bytes");
+                error!("Shared secret for X255 is not 32 bytes");
                 return Err(Error::FunctionFailed);
             };
             tmp.reverse();
@@ -1139,14 +1118,14 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to decrypt {_err:?}");
+                error!("Failed to decrypt {_err:?}");
                 Error::FunctionFailed
             })?
             .plaintext;
         self.se
             .run_session_command(session_id, &CloseSession {}, &mut [0; 128])
             .map_err(|_err| {
-                error_now!("Failed to decrypt {_err:?}");
+                error!("Failed to decrypt {_err:?}");
                 Error::FunctionFailed
             })?;
 
@@ -1173,7 +1152,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to decrypt {_err:?}");
+                error!("Failed to decrypt {_err:?}");
                 Error::FunctionFailed
             })?;
         Ok(reply::Decrypt {
@@ -1235,11 +1214,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let material = core_keystore
             .load_key(Secrecy::Public, Some(kind), &req.key)
             .map_err(|err| {
-                debug_now!("Failed to load key for decrypt: {err:?}");
+                error!("Failed to load key for decrypt: {err:?}");
                 err
             })?;
         let parsed = RsaPublicParts::deserialize(&material.material).map_err(|_err| {
-            error_now!("Failed to parse volatile rsa key data: {_err:?}");
+            error!("Failed to parse volatile rsa key data: {_err:?}");
             Error::CborError
         })?;
 
@@ -1257,7 +1236,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to re-import modulus for encrypt: {_err:?}");
+                error!("Failed to re-import modulus for encrypt: {_err:?}");
                 Error::FunctionFailed
             })?;
         self.se
@@ -1266,7 +1245,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to re-import key for encrypt: {_err:?}");
+                error!("Failed to re-import key for encrypt: {_err:?}");
                 Error::FunctionFailed
             })?;
 
@@ -1281,7 +1260,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to delete key after encrypt: {_err:?}");
+                error!("Failed to delete key after encrypt: {_err:?}");
                 Error::FunctionFailed
             })?;
 
@@ -1294,7 +1273,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         self.se
             .run_command(&DeleteSecureObject { object_id: id }, buf)
             .map_err(|_err| {
-                error_now!("Failed to delete key after encrypt: {_err:?}");
+                error!("Failed to delete key after encrypt: {_err:?}");
                 Error::FunctionFailed
             })?;
         Ok(ret)
@@ -1308,7 +1287,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     ) -> Result<reply::Sign, Error> {
         match req.mechanism {
             Mechanism::P256 => {
-                debug_now!("Implement P256 without prehashing");
+                debug!("TODO: Implement P256 without prehashing");
                 Err(Error::FunctionNotSupported)
             }
             Mechanism::P256Prehashed => self.sign_ecdsa(req, se050_keystore, ns),
@@ -1330,7 +1309,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         se050_keystore: &mut impl Keystore,
         kind: Kind,
     ) -> Result<reply::Sign, Error> {
-        debug_now!("Sign volatile");
+        debug!("Sign volatile");
         let buf = &mut [0; BUFFER_LEN];
         let data = se050_keystore.load_key(Secrecy::Secret, Some(kind), &key_id)?;
         let data: VolatileRsaKey = cbor_deserialize(&data.material).or(Err(Error::CborError))?;
@@ -1353,7 +1332,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 debug!("Failed to authenticate session");
                 Error::FunctionFailed
             })?;
-        debug_now!("Data: {}", hexstr!(data_to_sign));
         let signature = self
             .se
             .run_session_command(
@@ -1366,18 +1344,17 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to sign {_err:?}");
+                error!("Failed to sign {_err:?}");
                 Error::FunctionFailed
             })?
             .plaintext;
         self.se
             .run_session_command(session_id, &CloseSession {}, &mut [0; 128])
             .map_err(|_err| {
-                error_now!("Failed to close session {_err:?}");
+                error!("Failed to close session {_err:?}");
                 Error::FunctionFailed
             })?;
 
-        debug_now!("SIGNATURE_LEN: {:?}", signature.len());
         Ok(reply::Sign {
             signature: Bytes::from_slice(signature).map_err(|_err| Error::FunctionFailed)?,
         })
@@ -1400,7 +1377,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to decrypt {_err:?}");
+                error!("Failed to decrypt {_err:?}");
                 Error::FunctionFailed
             })?;
         Ok(reply::Sign {
@@ -1479,12 +1456,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                debug_now!("Failed to perform agree: {_err:?}");
+                error!("Failed to perform agree: {_err:?}");
                 Error::FunctionFailed
             })?;
 
         let signature_der = p256::ecdsa::Signature::from_der(res.signature).map_err(|_err| {
-            error_now!("Failed to parse p256 signature: {_err:?}");
+            error!("Failed to parse p256 signature: {_err:?}");
             Error::FunctionFailed
         })?;
         let mut signature = Bytes::new();
@@ -1533,12 +1510,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                debug_now!("Failed to perform agree: {_err:?}");
+                error!("Failed to perform agree: {_err:?}");
                 Error::FunctionFailed
             })?;
 
         if res.signature.len() != 64 {
-            debug_now!(
+            error!(
                 "Got signature of wrong length for EdDsa25519: {}",
                 res.signature.len()
             );
@@ -1563,7 +1540,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     ) -> Result<reply::Verify, Error> {
         match req.mechanism {
             Mechanism::P256 => {
-                debug_now!("Implement P256 without prehashing");
+                debug!("Implement P256 without prehashing");
                 Err(Error::FunctionNotSupported)
             }
             Mechanism::P256Prehashed => self.verify_ecdsa_prehashed(
@@ -1604,14 +1581,14 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let material = core_keystore
             .load_key(Secrecy::Public, Some(kind), &req.key)
             .map_err(|err| {
-                debug_now!("Failed to load key for verify: {err:?}");
+                debug!("Failed to load key for verify: {err:?}");
                 err
             })?;
         let buf = &mut [0; 1024];
         let id = generate_object_id_ns(core_keystore.rng(), ns, ObjectKind::PublicTemporary);
 
         let signature = p256::ecdsa::Signature::from_slice(&req.signature).map_err(|_err| {
-            error_now!("Failed to parse request signature: {_err:?}");
+            error!("Failed to parse request signature: {_err:?}");
             Error::FunctionFailed
         })?;
 
@@ -1626,7 +1603,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to write EC public key: {_err:?}");
+                error!("Failed to write EC public key: {_err:?}");
                 Error::FunctionFailed
             })?;
         let res = self
@@ -1641,7 +1618,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to verify: {_err:?}");
+                error!("Failed to verify: {_err:?}");
                 Error::FunctionFailed
             })?;
 
@@ -1651,7 +1628,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         self.se
             .run_command(&DeleteSecureObject { object_id: id }, buf)
             .map_err(|_err| {
-                error_now!("Failed to delete after verify: {_err:?}");
+                error!("Failed to delete after verify: {_err:?}");
                 Error::FunctionFailed
             })?;
         Ok(ret)
@@ -1668,7 +1645,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let material = core_keystore
             .load_key(Secrecy::Public, Some(kind), &req.key)
             .map_err(|err| {
-                debug_now!("Failed to load key for verify: {err:?}");
+                debug!("Failed to load key for verify: {err:?}");
                 err
             })?;
         let buf = &mut [0; 1024];
@@ -1684,12 +1661,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to write EC public key: {_err:?}");
+                error!("Failed to write EC public key: {_err:?}");
                 Error::FunctionFailed
             })?;
 
         let Ok(mut signature): Result<[u8; 64], _> = (&**req.signature).try_into() else {
-            warn_now!(
+            error!(
                 "Got Ed25519 signature that is not 64 bytes: {}",
                 req.signature.len()
             );
@@ -1709,7 +1686,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to verify: {_err:?}");
+                error!("Failed to verify: {_err:?}");
                 Error::FunctionFailed
             })?;
 
@@ -1719,7 +1696,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         self.se
             .run_command(&DeleteSecureObject { object_id: id }, buf)
             .map_err(|_err| {
-                error_now!("Failed to delete after verify: {_err:?}");
+                error!("Failed to delete after verify: {_err:?}");
                 Error::FunctionFailed
             })?;
         Ok(ret)
@@ -1736,11 +1713,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let material = core_keystore
             .load_key(Secrecy::Public, Some(kind), &req.key)
             .map_err(|err| {
-                debug_now!("Failed to load key for rsa sign: {err:?}");
+                debug!("Failed to load key for rsa sign: {err:?}");
                 err
             })?;
         let parsed = RsaPublicParts::deserialize(&material.material).map_err(|_err| {
-            error_now!("Failed to parse public rsa key data: {_err:?}");
+            error!("Failed to parse public rsa key data: {_err:?}");
             Error::CborError
         })?;
 
@@ -1758,7 +1735,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to re-import modulus for verify: {_err:?}");
+                error!("Failed to re-import modulus for verify: {_err:?}");
                 Error::FunctionFailed
             })?;
         self.se
@@ -1767,7 +1744,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to re-import key for verify: {_err:?}");
+                error!("Failed to re-import key for verify: {_err:?}");
                 Error::FunctionFailed
             })?;
 
@@ -1788,7 +1765,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to encrypt signature: {_err:?}");
+                error!("Failed to encrypt signature: {_err:?}");
                 Error::FunctionFailed
             })?
             .ciphertext;
@@ -1800,7 +1777,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         self.se
             .run_command(&DeleteSecureObject { object_id: id }, buf)
             .map_err(|_err| {
-                error_now!("Failed to delete key after verify: {_err:?}");
+                error!("Failed to delete key after verify: {_err:?}");
                 Error::FunctionFailed
             })?;
         Ok(ret)
@@ -1834,12 +1811,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         core_keystore: &mut impl Keystore,
     ) -> Result<reply::DeserializeKey, Error> {
         if req.format != KeySerialization::Raw {
-            debug_now!("Unsupported P256 public format: {:?}", req.format);
+            debug!("Unsupported P256 public format: {:?}", req.format);
             return Err(Error::FunctionFailed);
         }
 
         if req.serialized_key.len() != 64 {
-            debug_now!(
+            debug!(
                 "Unsupported P256 public key length: {}",
                 req.serialized_key.len()
             );
@@ -1862,12 +1839,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         core_keystore: &mut impl Keystore,
     ) -> Result<reply::DeserializeKey, Error> {
         if req.format != KeySerialization::Raw {
-            debug_now!("Unsupported x255 public format: {:?}", req.format);
+            debug!("Unsupported x255 public format: {:?}", req.format);
             return Err(Error::FunctionFailed);
         }
 
         let Ok(mut buf): Result<[u8; 32], _> = (&**req.serialized_key).try_into() else {
-            debug_now!(
+            debug!(
                 "Unsupported x255 public key length: {}",
                 req.serialized_key.len()
             );
@@ -1888,12 +1865,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         core_keystore: &mut impl Keystore,
     ) -> Result<reply::DeserializeKey, Error> {
         if req.format != KeySerialization::Raw {
-            debug_now!("Unsupported ed255 public format: {:?}", req.format);
+            debug!("Unsupported ed255 public format: {:?}", req.format);
             return Err(Error::FunctionFailed);
         }
 
         let Ok(mut buf): Result<[u8; 32], _> = (&**req.serialized_key).try_into() else {
-            debug_now!(
+            debug!(
                 "Unsupported ed255 public key length: {}",
                 req.serialized_key.len()
             );
@@ -1916,7 +1893,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         core_keystore: &mut impl Keystore,
     ) -> Result<reply::DeserializeKey, Error> {
         if req.format != KeySerialization::RsaParts {
-            debug_now!("Unsupported rsa public format: {:?}", req.format);
+            debug!("Unsupported rsa public format: {:?}", req.format);
             return Err(Error::FunctionFailed);
         }
         let material = &req.serialized_key;
@@ -1949,13 +1926,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         core_keystore: &mut impl Keystore,
     ) -> Result<reply::SerializeKey, Error> {
         if req.format != KeySerialization::Raw {
-            debug_now!("Unsupported P256 public format: {:?}", req.format);
+            debug!("Unsupported P256 public format: {:?}", req.format);
             return Err(Error::FunctionFailed);
         }
 
         let mut data = core_keystore.load_key(Secrecy::Public, Some(Kind::P256), &req.key)?;
         if data.material.len() != 65 {
-            debug_now!("Incorrect P256 public key length: {}", data.material.len());
+            debug!("Incorrect P256 public key length: {}", data.material.len());
             return Err(Error::FunctionFailed);
         }
         data.material.rotate_left(1);
@@ -1970,7 +1947,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         core_keystore: &mut impl Keystore,
     ) -> Result<reply::SerializeKey, Error> {
         if req.format != KeySerialization::Raw {
-            debug_now!("Unsupported x255 public format: {:?}", req.format);
+            debug!("Unsupported x255 public format: {:?}", req.format);
             return Err(Error::FunctionFailed);
         }
 
@@ -1986,7 +1963,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         core_keystore: &mut impl Keystore,
     ) -> Result<reply::SerializeKey, Error> {
         if req.format != KeySerialization::Raw {
-            debug_now!("Unsupported ed255 public format: {:?}", req.format);
+            debug!("Unsupported ed255 public format: {:?}", req.format);
             return Err(Error::FunctionFailed);
         }
 
@@ -2004,7 +1981,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         core_keystore: &mut impl Keystore,
     ) -> Result<reply::SerializeKey, Error> {
         if req.format != KeySerialization::RsaParts {
-            debug_now!("Unsupported rsa public format: {:?}", req.format);
+            debug!("Unsupported rsa public format: {:?}", req.format);
             return Err(Error::FunctionFailed);
         }
 
@@ -2020,9 +1997,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         se050_keystore: &mut impl Keystore,
         ns: NamespaceValue,
     ) -> Result<reply::Clear, Error> {
-        debug_now!("Clearing: {:?}", req.key);
+        debug!("Clearing: {:?}", req.key);
         let (parsed_key, _parsed_ty) = parse_key_id(req.key, ns).ok_or_else(|| {
-            debug_now!("Failed to parse key id");
+            debug!("Failed to parse key id");
             Error::RequestNotAvailable
         })?;
 
@@ -2034,12 +2011,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
             // We delete the exported data, which can be imported again if unwrapped.
             ParsedObjectId::VolatileKey(_obj_id) => {
-                debug_now!("Clearing data for {:?}", _obj_id.0);
+                debug!("Clearing data for {:?}", _obj_id.0);
                 se050_keystore.delete_key(&req.key)
             }
             // We delete the key that protects the actual RSA private key data, which can be imported again if unwrapped.
             ParsedObjectId::VolatileRsaKey(_obj_id) => {
-                debug_now!(
+                debug!(
                     "Clearing data for {:?} and {:?}",
                     _obj_id.key_id(),
                     _obj_id.intermediary_key_id()
@@ -2061,7 +2038,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             return Err(Error::RequestNotAvailable);
         }
         let (parsed_key, _parsed_ty) = parse_key_id(req.key, ns).ok_or_else(|| {
-            debug_now!("Failed to parse key id");
+            debug!("Failed to parse key id");
             // Let non-se050 keys be wrapped by the core backend
             Error::RequestNotAvailable
         })?;
@@ -2070,23 +2047,22 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             ParsedObjectId::VolatileKey(_) => WrappedKeyType::Volatile,
             ParsedObjectId::VolatileRsaKey(_) => WrappedKeyType::VolatileRsa,
             _ => {
-                debug_now!("Wrapping non-volatile key");
+                debug!("Wrapping non-volatile key");
                 return Err(Error::ObjectHandleInvalid);
             }
         };
-        debug_now!("trussed: Chacha8Poly1305::WrapKey {:?}", req.key);
+        debug!("trussed: Chacha8Poly1305::WrapKey {:?}", req.key);
         match parsed_key {
             ParsedObjectId::VolatileKey(id) => {
-                debug_now!("Id: {:?}", id.0);
+                debug!("Id: {:?}", id.0);
             }
             ParsedObjectId::VolatileRsaKey(id) => {
-                debug_now!("Rsa Ids: {:?}", (id.key_id(), id.intermediary_key_id()));
+                debug!("Rsa Ids: {:?}", (id.key_id(), id.intermediary_key_id()));
             }
             _ => unreachable!(),
         }
 
         let serialized_key = se050_keystore.load_key(key::Secrecy::Secret, None, &req.key)?;
-        debug_now!("Wrapping material: {}", hex_str!(&serialized_key.material));
 
         let message = Message::from_slice(&serialized_key.serialize()).unwrap();
 
@@ -2120,11 +2096,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             .se
             .run_command(&CheckObjectExists { object_id }, buf)
             .map_err(|_err| {
-                debug_now!("Failed to check existence");
+                error!("Failed to check existence");
                 Error::FunctionFailed
             })?;
         if !res.result.is_success() {
-            debug_now!("{object_id:?} doesn't exist");
+            debug!("{object_id:?} doesn't exist");
             return Err(Error::FunctionFailed);
         }
         Ok(())
@@ -2137,7 +2113,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         se050_keystore: &mut impl Keystore,
         ns: NamespaceValue,
     ) -> Result<reply::UnwrapKey, Error> {
-        debug_now!("Unwrapping_key");
+        debug!("Unwrapping_key");
         // SE050 wrapped keys start with a `0`, see `wrap_key` for details
         if !matches!(req.mechanism, Mechanism::Chacha8Poly1305)
             || req.wrapped_key.first() != Some(&0)
@@ -2212,7 +2188,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             }
             WrappedKeyType::VolatileRsa => {
                 if !matches!(kind, Kind::Rsa2048 | Kind::Rsa3072 | Kind::Rsa4096) {
-                    debug_now!("Bad kind for RSA volatile");
+                    warn!("Bad kind for RSA volatile");
                     return Err(Error::FunctionFailed);
                 }
                 let mat: VolatileRsaKey =
@@ -2230,8 +2206,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 key_id_for_obj(mat.key_id.0, key_ty)
             }
         };
-
-        debug_now!("Unwrapped material: {}", hex_str!(&material));
 
         se050_keystore.overwrite_key(
             Location::Volatile,
@@ -2252,7 +2226,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         ns: NamespaceValue,
     ) -> Result<reply::Exists, Error> {
         let (parsed_key, parsed_ty) = parse_key_id(req.key, ns).ok_or_else(|| {
-            debug_now!("Failed to parse key id");
+            debug!("Failed to parse key id");
             // Let non-se050 keys be checked by the core backend
             Error::RequestNotAvailable
         })?;
@@ -2268,7 +2242,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 .se
                 .run_command(&CheckObjectExists { object_id: key.0 }, buf)
                 .map_err(|_err| {
-                    error_now!("Failed to check existence: {_err:?}");
+                    error!("Failed to check existence: {_err:?}");
                     Error::FunctionFailed
                 })?
                 .result
@@ -2279,7 +2253,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                         .se
                         .run_command(&CheckObjectExists { object_id: key.0 }, buf)
                         .map_err(|_err| {
-                            error_now!("Failed to check existence: {_err:?}");
+                            error!("Failed to check existence: {_err:?}");
                             Error::FunctionFailed
                         })?
                         .result
@@ -2296,7 +2270,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                             buf,
                         )
                         .map_err(|_err| {
-                            error_now!("Failed to check existence: {_err:?}");
+                            error!("Failed to check existence: {_err:?}");
                             Error::FunctionFailed
                         })?
                         .result
@@ -2310,7 +2284,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                             buf,
                         )
                         .map_err(|_err| {
-                            error_now!("Failed to check existence: {_err:?}");
+                            error!("Failed to check existence: {_err:?}");
                             Error::FunctionFailed
                         })?
                         .result
@@ -2329,8 +2303,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     ) -> Result<reply::DeleteAllKeys, Error> {
         let core_count = core_keystore.delete_all(req.location)?;
         let _fs_count = se050_keystore.delete_all(req.location)?;
-        debug_now!("Deleted core: {core_count}");
-        debug_now!("Deleted fs: {_fs_count}");
+        debug!("Deleted core: {core_count}");
+        debug!("Deleted fs: {_fs_count}");
 
         let buf = &mut [0; 1024];
         let buf2 = &mut [0; 128];
@@ -2347,7 +2321,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     buf,
                 )
                 .map_err(|_err| {
-                    error_now!("Failed to read id_list: {_err:?}");
+                    error!("Failed to read id_list: {_err:?}");
                     Error::FunctionFailed
                 })?;
 
@@ -2355,20 +2329,20 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             offset += (to_delete.ids.len() / 4) as u16;
             for obj_slice in to_delete.ids.chunks_exact(4) {
                 let obj = ObjectId(obj_slice.try_into().unwrap());
-                debug_now!("Dealing with obj: {obj:02x?}");
+                debug!("Dealing with obj: {obj:02x?}");
                 if !object_in_range(obj) {
                     continue;
                 }
-                debug_now!("In range");
+                debug!("In range");
                 let Some((ns_to_check, parsed_obj_id)) = ParsedObjectId::parse(obj) else {
-                    debug_now!("Failed to parse object id");
+                    debug!("Failed to parse object id");
                     continue;
                 };
                 if ns_to_check != ns {
                     continue;
                 }
-                debug_now!("In ns");
-                debug_now!("Got parsed: {parsed_obj_id:02x?}");
+                debug!("In ns");
+                debug!("Got parsed: {parsed_obj_id:02x?}");
                 match (req.location, parsed_obj_id) {
                     (
                         Location::Internal | Location::External,
@@ -2379,7 +2353,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                         self.se
                             .run_command(&DeleteSecureObject { object_id: obj.0 }, buf2)
                             .map_err(|_err| {
-                                error_now!("Failed to delete object: {obj:02x?} {_err:?}");
+                                error!("Failed to delete object: {obj:02x?} {_err:?}");
                                 Error::FunctionFailed
                             })?;
                     }
@@ -2389,7 +2363,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                         self.se
                             .run_command(&DeleteSecureObject { object_id: obj.0 }, buf2)
                             .map_err(|_err| {
-                                error_now!("Failed to delete object: {obj:02x?} {_err:?}");
+                                error!("Failed to delete object: {obj:02x?} {_err:?}");
                                 Error::FunctionFailed
                             })?;
                     }
@@ -2502,7 +2476,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to import E {_err:?}");
+                error!("Failed to import E {_err:?}");
                 Error::FunctionFailed
             })?;
         self.se
@@ -2516,7 +2490,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to import D {_err:?}");
+                error!("Failed to import D {_err:?}");
                 Error::FunctionFailed
             })?;
         self.se
@@ -2530,7 +2504,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to import N {_err:?}");
+                error!("Failed to import N {_err:?}");
                 Error::FunctionFailed
             })?;
 
@@ -2602,7 +2576,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         match req.mechanism {
             Mechanism::Ed255 => {
                 let private_data: [u8; 32] = (&**req.raw_key).try_into().map_err(|_| {
-                    debug_now!("Raw key is too large");
+                    debug!("Raw key is too large");
                     Error::InvalidSerializedKey
                 })?;
 
@@ -2623,13 +2597,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                         buf,
                     )
                     .map_err(|_err| {
-                        error_now!("Failed to inject key: {_err:?}");
+                        error!("Failed to inject key: {_err:?}");
                         Error::FunctionFailed
                     })?;
             }
             Mechanism::X255 => {
                 let mut private_data: [u8; 32] = (&**req.raw_key).try_into().map_err(|_| {
-                    debug_now!("Raw key is too large");
+                    debug!("Raw key is too large");
                     Error::InvalidSerializedKey
                 })?;
 
@@ -2651,14 +2625,14 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                         buf,
                     )
                     .map_err(|_err| {
-                        error_now!("Failed to inject key: {_err:?}");
+                        error!("Failed to inject key: {_err:?}");
                         Error::FunctionFailed
                     })?;
             }
             Mechanism::P256 => {
                 let private =
                     p256_cortex_m4::SecretKey::from_bytes(&req.raw_key).map_err(|_| {
-                        debug_now!("Raw key is invalid");
+                        debug!("Raw key is invalid");
                         Error::InvalidSerializedKey
                     })?;
                 let public_key = private.public_key().to_uncompressed_sec1_bytes();
@@ -2676,7 +2650,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                         buf,
                     )
                     .map_err(|_err| {
-                        error_now!("Failed to inject key: {_err:?}");
+                        error!("Failed to inject key: {_err:?}");
                         Error::FunctionFailed
                     })?;
             }
@@ -2686,7 +2660,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             .se
             .run_command(&ExportObject::builder().object_id(id.0).build(), buf)
             .map_err(|_err| {
-                debug_now!("Failed to export imported key: {_err:?}");
+                debug!("Failed to export imported key: {_err:?}");
                 Error::FunctionFailed
             })?
             .data;
@@ -2696,7 +2670,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             exported_material: exported,
         })
         .map_err(|_err| {
-            debug_now!("Failed to encode exported key: {_err:?}");
+            debug!("Failed to encode exported key: {_err:?}");
             Error::FunctionFailed
         })?;
         se050_keystore.overwrite_key(Location::Volatile, Secrecy::Secret, kind, &key, &material)?;
@@ -2728,7 +2702,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to import E: {_err:?}");
+                error!("Failed to import E: {_err:?}");
                 Error::FunctionFailed
             })?;
         self.se
@@ -2742,7 +2716,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to import d: {_err:?}");
+                error!("Failed to import d: {_err:?}");
                 Error::FunctionFailed
             })?;
         self.se
@@ -2756,7 +2730,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                error_now!("Failed to import N: {_err:?}");
+                error!("Failed to import N: {_err:?}");
                 Error::FunctionFailed
             })?;
         Ok(())
@@ -2773,7 +2747,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         match req.mechanism {
             Mechanism::Ed255 => {
                 let private_data: [u8; 32] = (&**req.raw_key).try_into().map_err(|_| {
-                    debug_now!("Raw key is too large");
+                    debug!("Raw key is too large");
                     Error::InvalidSerializedKey
                 })?;
 
@@ -2793,13 +2767,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                         buf,
                     )
                     .map_err(|_err| {
-                        error_now!("Failed to inject key: {_err:?}");
+                        error!("Failed to inject key: {_err:?}");
                         Error::FunctionFailed
                     })?;
             }
             Mechanism::X255 => {
                 let mut private_data: [u8; 32] = (&**req.raw_key).try_into().map_err(|_| {
-                    debug_now!("Raw key is too large");
+                    debug!("Raw key is too large");
                     Error::InvalidSerializedKey
                 })?;
 
@@ -2820,14 +2794,14 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                         buf,
                     )
                     .map_err(|_err| {
-                        error_now!("Failed to inject key: {_err:?}");
+                        error!("Failed to inject key: {_err:?}");
                         Error::FunctionFailed
                     })?;
             }
             Mechanism::P256Prehashed | Mechanism::P256 => {
                 let private =
                     p256_cortex_m4::SecretKey::from_bytes(&req.raw_key).map_err(|_| {
-                        debug_now!("Raw key is invalid");
+                        debug!("Raw key is invalid");
                         Error::InvalidSerializedKey
                     })?;
                 let public_key = private.public_key().to_uncompressed_sec1_bytes();
@@ -2844,7 +2818,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                         buf,
                     )
                     .map_err(|_err| {
-                        error_now!("Failed to inject key: {_err:?}");
+                        error!("Failed to inject key: {_err:?}");
                         Error::FunctionFailed
                     })?;
             }

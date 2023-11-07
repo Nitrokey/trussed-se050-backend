@@ -126,7 +126,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
     fn get_se050_salt(&mut self) -> Result<Salt, Error> {
         let buf = &mut [0; 32];
-        debug_now!("Attempting to read");
+        debug!("Attempting to read");
         let tmp = self.se.run_command(
             &ReadObject::builder()
                 .object_id(GLOBAL_SALT_ID)
@@ -138,12 +138,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Ok(res) => return res.data.try_into().map_err(|_| Error::ReadFailed),
             Err(se05x::se05x::Error::Status(iso7816::Status::IncorrectDataParameter)) => {}
             Err(_err) => {
-                debug!("Got unexpected error: {_err:?}");
+                error!("Got unexpected error: {_err:?}");
                 return Err(Error::Se050);
             }
         };
 
-        debug_now!("Generating salt");
+        debug!("Generating salt");
         // Salt was not found, need to generate, store it and return it.
         let salt: [u8; SALT_LEN] = self
             .se
@@ -156,11 +156,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             .data
             .try_into()
             .map_err(|_err| {
-                debug_now!("Random data failed: {_err:?}");
+                error!("Random data failed: {_err:?}");
                 Error::ReadFailed
             })?;
 
-        debug_now!("Writing salt");
+        debug!("Writing salt");
         self.se
             .run_command(
                 &WriteBinary::builder()
@@ -172,7 +172,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 buf,
             )
             .map_err(|_err| {
-                debug_now!("Writing data failed: {_err:?}");
+                error!("Writing data failed: {_err:?}");
                 Error::ReadFailed
             })?;
 
@@ -185,10 +185,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         ikm: Option<Bytes<MAX_HW_KEY_LEN>>,
         rng: &mut R,
     ) -> Result<&Hkdf<Sha256>, Error> {
-        debug_now!("Extracting key");
+        debug!("Extracting key");
         let ikm: &[u8] = ikm.as_deref().map(|i| &**i).unwrap_or(&[]);
         let salt = self.get_global_salt(global_fs, rng)?;
-        debug_now!("Getting se050 salt");
+        debug!("Getting se050 salt");
         let se050_salt = self.get_se050_salt()?;
 
         let mut real_ikm: Bytes<{ SALT_LEN + MAX_HW_KEY_LEN }> =
@@ -218,7 +218,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         global_fs: &mut impl Filestore,
         rng: &mut R,
     ) -> Result<Key, Error> {
-        debug_now!("Generating app key");
+        debug!("Generating app key");
         Ok(match &self.hw_key {
             HardwareKey::Extracted(okm) => Self::expand(okm, &client_id),
             HardwareKey::Raw(hw_k) => {
@@ -267,7 +267,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
         let auth_ctx = backend_ctx.auth;
         let ns = backend_ctx.ns;
 
-        debug_now!("Trussed Auth request: {request:?}");
+        debug!("Trussed Auth request: {request:?}");
         // FIXME: Have a real implementation from trussed
         let mut backend_path = core_ctx.path.clone();
         backend_path.push(&PathBuf::from(BACKEND_DIR));
@@ -346,7 +346,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                     &request.pin,
                     request.retries,
                 )?;
-                debug_now!("Created pin");
+                debug!("Created pin");
                 Ok(reply::SetPin {}.into())
             }
             AuthRequest::SetPinWithKey(request) => {
@@ -394,11 +394,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 Ok(reply::DeleteAllPins.into())
             }
             AuthRequest::PinRetries(request) => {
-                debug_now!("Getting pin retries");
+                debug!("Getting pin retries");
                 let pin_data = PinData::load(request.id, fs, self.metadata_location)?;
-                debug_now!("Loaded {pin_data:?}");
+                debug!("Loaded {pin_data:?}");
                 let (attempts, max) = pin_data.get_attempts(&mut self.se, keystore.rng())?;
-                debug_now!("Attempts: {attempts:?}, {max:?}");
+                debug!("Attempts: {attempts:?}, {max:?}");
                 Ok(reply::PinRetries {
                     retries: Some((max - attempts) as u8),
                 }

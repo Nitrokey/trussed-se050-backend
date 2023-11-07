@@ -319,7 +319,7 @@ impl PinData {
         se050: &mut Se05X<Twi, D>,
         rng: &mut R,
     ) -> Result<bool, Error> {
-        debug_now!("Checking pin: {:?}", self.id);
+        debug!("Checking pin: {:?}", self.id);
         let buf = &mut [0; 1024];
         let pin_aes_key_value = expand_pin_key(&self.salt, app_key, self.id, value);
         let res = se050.run_command(
@@ -332,16 +332,16 @@ impl PinData {
         let res = se050
             .authenticate_aes128_session(session_id, &pin_aes_key_value, rng)
             .map_err(|err| {
-                debug_now!("Failed to authenticate pin: {err:?}");
+                error!("Failed to authenticate pin: {err:?}");
                 err
             })?;
         se050
             .run_session_command(session_id, &CloseSession {}, buf)
             .map_err(|err| {
-                debug_now!("Failed to close session: {err:?}");
+                error!("Failed to close session: {err:?}");
                 err
             })?;
-        debug_now!("Check succeeded with {res:?}");
+        debug!("Check succeeded with {res:?}");
         Ok(res)
     }
 
@@ -507,7 +507,7 @@ impl PinData {
                 buf,
             )
             .map_err(|_err| {
-                debug!("Failed to delete auth: {_err:?}");
+                error!("Failed to delete auth: {_err:?}");
                 _err
             })?;
         debug!("Closing sess");
@@ -521,7 +521,7 @@ impl PinData {
                 buf,
             )
             .map_err(|err| {
-                debug!("Failed to delete user id: {err:?}");
+                error!("Failed to delete user id: {err:?}");
                 err
             })?;
         Ok(())
@@ -533,19 +533,19 @@ impl PinData {
         location: Location,
         se050: &mut Se05X<Twi, D>,
     ) -> Result<(), Error> {
-        debug_now!("Deleting {self:02x?}");
+        debug!("Deleting {self:02x?}");
         match self.se_id {
             PinSeId::WithDerived(se_id) => Self::delete_with_derived(se050, se_id)?,
             PinSeId::Raw(se_id) => {
                 let buf = &mut [0; 1024];
-                debug_now!("Deleting simple");
+                debug!("Deleting simple");
                 se050.run_command(&DeleteSecureObject { object_id: se_id.0 }, buf)?;
             }
         }
 
-        debug_now!("Removing file {}", self.id.path());
+        debug!("Removing file {}", self.id.path());
         fs.remove_file(&self.id.path(), location).map_err(|_err| {
-            debug!("Removing file failed: {_err:?}");
+            error!("Removing file failed: {_err:?}");
             Error::WriteFailed
         })?;
         Ok(())
@@ -569,7 +569,7 @@ impl PinData {
                 buf,
             )
             .map_err(|err| {
-                debug_now!("Got err reading attempts: {err:?}");
+                error!("Got err reading attempts: {err:?}");
                 err
             })?
             .attributes;
@@ -614,7 +614,7 @@ pub(crate) fn delete_all_pins<Twi: I2CForT1, D: DelayUs<u32>>(
         .read_dir_first(path!(""), location, None)
         .map_err(|_| Error::ReadFailed)?
     {
-        debug_now!("Deleting {}", entry.path());
+        debug!("Deleting {}", entry.path());
         delete_from_path(entry.path(), fs, location, se050)?;
     }
 

@@ -140,11 +140,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
         resources: &mut ServiceResources<P>,
     ) -> Result<<ManageExtension as Extension>::Reply, Error> {
         self.configure().map_err(|err| {
-            debug_now!("Failed to enable for management: {err:?}");
+            debug!("Failed to enable for management: {err:?}");
             err
         })?;
 
-        debug_now!("Runnig manage request: {request:?}");
+        debug!("Runnig manage request: {request:?}");
         match request {
             ManageRequest::FactoryReset(FactoryResetRequest) => {
                 let mut buf = [b'a'; 128];
@@ -161,7 +161,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                         &mut buf,
                     )
                     .map_err(|_err| {
-                        debug_now!("Failed to write factory reset user id: {_err:?}");
+                        debug!("Failed to write factory reset user id: {_err:?}");
                         Error::FunctionFailed
                     })?;
                 let session = self
@@ -173,7 +173,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                         &mut buf,
                     )
                     .map_err(|_err| {
-                        debug_now!("Failed to create reset session: {_err:?}");
+                        debug!("Failed to create reset session: {_err:?}");
                         Error::FunctionFailed
                     })?;
 
@@ -184,14 +184,14 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                         &mut buf,
                     )
                     .map_err(|_err| {
-                        debug_now!("Failed to verify reset session: {_err:?}");
+                        debug!("Failed to verify reset session: {_err:?}");
                         Error::FunctionFailed
                     })?;
 
                 self.se
                     .run_session_command(session.session_id, &DeleteAll {}, &mut buf)
                     .map_err(|_err| {
-                        debug_now!("Failed to factory reset: {_err:?}");
+                        debug!("Failed to factory reset: {_err:?}");
                         Error::FunctionFailed
                     })?;
                 let id_list = self
@@ -204,13 +204,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                         &mut buf,
                     )
                     .map_err(|_err| {
-                        debug_now!("Failed to factory reset: {_err:?}");
+                        debug!("Failed to factory reset: {_err:?}");
                         Error::FunctionFailed
                     })?;
                 for obj in id_list.ids.chunks(4) {
-                    debug_now!("Id: {}", hex_str!(obj, 4));
+                    debug!("Id: {}", hex_str!(obj, 4));
                 }
-                debug_now!("More: {:?}", id_list.more);
+                debug!("More: {:?}", id_list.more);
 
                 const PATHS_TO_SAVE: &[&Path] = &[path!("fido/x5c/00"), path!("fido/sec/00")];
 
@@ -227,15 +227,15 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                     true
                 })
                 .map_err(|_err| {
-                    debug_now!("Failed to delete ifs: {_err:?}");
+                    debug!("Failed to delete ifs: {_err:?}");
                     Error::FunctionFailed
                 })?;
                 efs.remove_dir_all(path!("/")).map_err(|_err| {
-                    debug_now!("Failed to delete efs: {_err:?}");
+                    debug!("Failed to delete efs: {_err:?}");
                     Error::FunctionFailed
                 })?;
                 vfs.remove_dir_all(path!("/")).map_err(|_err| {
-                    debug_now!("Failed to delete vfs: {_err:?}");
+                    debug!("Failed to delete vfs: {_err:?}");
                     Error::FunctionFailed
                 })?;
 
@@ -250,7 +250,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                     .se
                     .run_command(&GetVersion {}, buf)
                     .map_err(|_err| {
-                        error_now!("Failed to get atr: {_err:?}");
+                        error!("Failed to get atr: {_err:?}");
                         Error::FunctionFailed
                     })?
                     .version_info;
@@ -263,7 +263,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                         buf,
                     )
                     .map_err(|_err| {
-                        error_now!("Failed to persistent mem: {_err:?}");
+                        error!("Failed to persistent mem: {_err:?}");
                         Error::FunctionFailed
                     })?
                     .available;
@@ -276,7 +276,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                         buf,
                     )
                     .map_err(|_err| {
-                        error_now!("Failed to TransientDeselect mem: {_err:?}");
+                        error!("Failed to TransientDeselect mem: {_err:?}");
                         Error::FunctionFailed
                     })?
                     .available;
@@ -289,7 +289,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                         buf,
                     )
                     .map_err(|_err| {
-                        error_now!("Failed to TransientReset mem: {_err:?}");
+                        error!("Failed to TransientReset mem: {_err:?}");
                         Error::FunctionFailed
                     })?
                     .available;

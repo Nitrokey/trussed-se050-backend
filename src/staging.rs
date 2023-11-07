@@ -37,7 +37,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<WrapKeyToFileExtension>
         let ns = backend_ctx.ns;
         match request {
             WrapKeyToFileRequest::WrapKeyToFile(req) => {
-                debug_now!("Wrapping key to file: {:?}", req.key);
+                debug!("Wrapping key to file: {:?}", req.key);
                 let res = self.wrap_key(
                     &request::WrapKey {
                         mechanism: req.mechanism,
@@ -54,7 +54,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<WrapKeyToFileExtension>
                 Ok(ext_reply::WrapKeyToFile::default().into())
             }
             WrapKeyToFileRequest::UnwrapKeyFromFile(req) => {
-                debug_now!("UnWrapping key from file");
+                debug!("UnWrapping key from file");
                 let data = filestore.read(&req.path, req.file_location)?;
                 let UnwrapKey { key } = self.unwrap_key(
                     &request::UnwrapKey {
