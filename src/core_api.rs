@@ -102,6 +102,7 @@ struct RsaImportElements<'a> {
     n: [u8; RSA_ARR_SIZE],
 }
 
+/// Parse a binary slice to a bigint
 fn be_slice_to_bigint(data: &[u8]) -> Option<U4096> {
     if data.len() > RSA_ARR_SIZE {
         return None;
@@ -111,6 +112,10 @@ fn be_slice_to_bigint(data: &[u8]) -> Option<U4096> {
     Some(U4096::from_be_bytes(arr))
 }
 
+/// Take the import format from the request data and return the integers required by the SE050
+///
+/// `data` is a expected to be a [`RsaImportFormat`][] serialized value,
+/// and size is the size of the RSA key from the `Mechanism` param
 fn handle_rsa_import_format(data: &[u8], size: u16) -> Option<RsaImportElements> {
     let parsed = RsaImportFormat::deserialize(data)
         .map_err(|_err| {
@@ -423,34 +428,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         })
     }
 
-    fn derive_key(
-        &mut self,
-        req: &request::DeriveKey,
-        core_keystore: &mut impl Keystore,
-        se050_keystore: &mut impl Keystore,
-        ns: NamespaceValue,
-    ) -> Result<reply::DeriveKey, Error> {
-        if req.additional_data.is_some() {
-            return Err(Error::MechanismParamInvalid);
-        }
-        let (parsed_key, parsed_ty) =
-            parse_key_id(req.base_key, ns).ok_or(Error::RequestNotAvailable)?;
-        match parsed_key {
-            ParsedObjectId::Pin(_)
-            | ParsedObjectId::PinWithDerived(_)
-            | ParsedObjectId::SaltValue(_) => Err(Error::MechanismParamInvalid),
-            ParsedObjectId::PersistentKey(k) => {
-                self.derive_raw_key(req, k.0, core_keystore, parsed_ty, ns)
-            }
-            ParsedObjectId::VolatileKey(k) => {
-                self.derive_volatile_key(req, k.0, parsed_ty, core_keystore, se050_keystore, ns)
-            }
-            ParsedObjectId::VolatileRsaKey(k) => {
-                self.derive_volatile_rsa_key(req, k, parsed_ty, core_keystore, se050_keystore, ns)
-            }
-        }
-    }
-
+    /// Put a volatile key stored on the filesystem back into the SE050
+    ///
+    /// This is used to perform one operation, the key must then be cleared again with [`reselect`](Se050Backend::reselect)
     fn reimport_volatile_key(
         &mut self,
         key: KeyId,
@@ -481,36 +461,43 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(())
     }
 
-    fn derive_volatile_key(
+    fn derive_key(
         &mut self,
         req: &request::DeriveKey,
-        key: ObjectId,
-        ty: KeyType,
         core_keystore: &mut impl Keystore,
         se050_keystore: &mut impl Keystore,
         ns: NamespaceValue,
     ) -> Result<reply::DeriveKey, Error> {
-        let kind = match ty {
-            KeyType::Ed255 => Kind::Ed255,
-            KeyType::X255 => Kind::X255,
-            KeyType::P256 => Kind::P256,
-            KeyType::Rsa2048 | KeyType::Rsa3072 | KeyType::Rsa4096 => {
-                unreachable!("Volatile rsa keys are derived in a separate function")
+        if req.additional_data.is_some() {
+            return Err(Error::MechanismParamInvalid);
+        }
+        let (parsed_key, parsed_ty) =
+            parse_key_id(req.base_key, ns).ok_or(Error::RequestNotAvailable)?;
+        match parsed_key {
+            ParsedObjectId::Pin(_)
+            | ParsedObjectId::PinWithDerived(_)
+            | ParsedObjectId::SaltValue(_) => Err(Error::MechanismParamInvalid),
+            ParsedObjectId::PersistentKey(k) => {
+                self.derive_raw_key(req, k.0, core_keystore, parsed_ty)
             }
-        };
-        self.reimport_volatile_key(req.base_key, kind, se050_keystore, key)?;
-        let res = self.derive_raw_key(req, key, core_keystore, ty, ns)?;
-        self.reselect()?;
-        Ok(res)
+            ParsedObjectId::VolatileKey(k) => {
+                self.derive_volatile_key(req, k.0, parsed_ty, core_keystore, se050_keystore)
+            }
+            ParsedObjectId::VolatileRsaKey(k) => {
+                self.derive_volatile_rsa_key(req, k, parsed_ty, core_keystore, se050_keystore)
+            }
+        }
     }
 
+    /// Derive a key stored on the SE050
+    ///
+    /// Either a persistent key or a volatile key that has been re-imported
     fn derive_raw_key(
         &mut self,
         req: &request::DeriveKey,
         key: ObjectId,
         core_keystore: &mut impl Keystore,
         ty: KeyType,
-        ns: NamespaceValue,
     ) -> Result<reply::DeriveKey, Error> {
         let buf = &mut [0; 1024];
         match ty {
@@ -573,7 +560,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Ok(reply::DeriveKey { key: result })
             }
             KeyType::Rsa2048 | KeyType::Rsa3072 | KeyType::Rsa4096 => {
-                self.derive_rsa_key(req, key, ty, core_keystore, ns)
+                self.derive_rsa_key(req, key, ty, core_keystore)
             }
         }
     }
@@ -584,7 +571,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         key: ObjectId,
         ty: KeyType,
         core_keystore: &mut impl Keystore,
-        _ns: NamespaceValue,
     ) -> Result<reply::DeriveKey, Error> {
         let kind = match ty {
             KeyType::Rsa2048 => Kind::Rsa2048,
@@ -637,6 +623,28 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(reply::DeriveKey { key })
     }
 
+    fn derive_volatile_key(
+        &mut self,
+        req: &request::DeriveKey,
+        key: ObjectId,
+        ty: KeyType,
+        core_keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
+    ) -> Result<reply::DeriveKey, Error> {
+        let kind = match ty {
+            KeyType::Ed255 => Kind::Ed255,
+            KeyType::X255 => Kind::X255,
+            KeyType::P256 => Kind::P256,
+            KeyType::Rsa2048 | KeyType::Rsa3072 | KeyType::Rsa4096 => {
+                unreachable!("Volatile rsa keys are derived in a separate function")
+            }
+        };
+        self.reimport_volatile_key(req.base_key, kind, se050_keystore, key)?;
+        let res = self.derive_raw_key(req, key, core_keystore, ty)?;
+        self.reselect()?;
+        Ok(res)
+    }
+
     fn derive_volatile_rsa_key(
         &mut self,
         req: &request::DeriveKey,
@@ -644,7 +652,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         ty: KeyType,
         core_keystore: &mut impl Keystore,
         se050_keystore: &mut impl Keystore,
-        _ns: NamespaceValue,
     ) -> Result<reply::DeriveKey, Error> {
         let kind = match ty {
             KeyType::Rsa2048 => Kind::Rsa2048,
@@ -2131,6 +2138,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         ns: NamespaceValue,
     ) -> Result<reply::UnwrapKey, Error> {
         debug_now!("Unwrapping_key");
+        // SE050 wrapped keys start with a `0`, see `wrap_key` for details
         if !matches!(req.mechanism, Mechanism::Chacha8Poly1305)
             || req.wrapped_key.first() != Some(&0)
         {
@@ -2957,6 +2965,7 @@ fn generate_rsa(object_id: ObjectId, size: u16) -> WriteRsaKey<'static> {
         .build()
 }
 
+/// Returns true on mechanisms that are handled by the S050 backend
 fn supported(mechanism: Mechanism) -> bool {
     matches!(
         mechanism,

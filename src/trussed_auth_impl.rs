@@ -93,7 +93,7 @@ impl fmt::Debug for HardwareKey {
     }
 }
 
-/// Per-client context for [`AuthBackend`][]
+/// Per-client context for the auth extension implementation
 #[derive(Default, Debug)]
 pub struct AuthContext {
     application_key: Option<Key>,
