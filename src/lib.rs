@@ -7,7 +7,7 @@ use hex_literal::hex;
 use littlefs2::path::Path;
 use namespacing::{Namespace, NamespaceValue};
 use se05x::{
-    se05x::{commands::ReadEcCurveList, EcCurve, ObjectId, Se05X},
+    se05x::{commands::ReadEcCurveList, Atr, EcCurve, ObjectId, Se05X},
     t1::I2CForT1,
 };
 use trussed::{types::Location, Bytes};
@@ -45,10 +45,15 @@ impl From<Location> for Se05xLocation {
     }
 }
 
+enum EnableState {
+    NotEnabled,
+    Enabled(Atr),
+    Failed(se05x::se05x::Error),
+}
+
 pub struct Se050Backend<Twi, D> {
     se: Se05X<Twi, D>,
-    enabled: bool,
-    failed_enable: Option<se05x::se05x::Error>,
+    enabled: EnableState,
     metadata_location: Location,
     hw_key: HardwareKey,
     ns: Namespace,
@@ -64,8 +69,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     ) -> Self {
         Se050Backend {
             se,
-            enabled: false,
-            failed_enable: None,
+            enabled: EnableState::NotEnabled,
             metadata_location,
             hw_key: match hardware_key {
                 None => HardwareKey::None,
@@ -76,32 +80,36 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         }
     }
 
-    fn enable(&mut self) -> Result<(), trussed::Error> {
-        if !self.enabled {
-            debug!("Enabling");
-            if let Err(e) = self.se.enable() {
-                self.failed_enable = Some(e);
-            } else {
-                self.failed_enable = None;
-                self.enabled = true;
-            }
+    fn enable(&mut self) -> Result<Atr, trussed::Error> {
+        match self.enabled {
+            EnableState::NotEnabled => match self.se.enable() {
+                Err(err) => {
+                    error!("Enabling failed: {:?}", err);
+                    self.enabled = EnableState::Failed(err);
+                    Err(trussed::Error::FunctionFailed)
+                }
+                Ok(atr) => {
+                    self.enabled = EnableState::Enabled(atr);
+                    Ok(atr)
+                }
+            },
+            EnableState::Enabled(atr) => Ok(atr),
+            EnableState::Failed(_err) => Err(trussed::Error::FunctionFailed),
         }
-        if let Some(_e) = self.failed_enable {
-            error!("Enabling failed: {:?}", _e);
-            return Err(trussed::Error::FunctionFailed);
-        }
-
-        Ok(())
     }
 
-    fn reselect(&mut self) -> Result<(), trussed::Error> {
-        if let Err(e) = self.se.enable() {
-            self.failed_enable = Some(e);
-        } else {
-            self.failed_enable = None;
-            self.enabled = true;
+    fn reselect(&mut self) -> Result<Atr, trussed::Error> {
+        match self.se.enable() {
+            Err(err) => {
+                error!("Reselecting failed: {:?}", err);
+                self.enabled = EnableState::Failed(err);
+                Err(trussed::Error::FunctionFailed)
+            }
+            Ok(atr) => {
+                self.enabled = EnableState::Enabled(atr);
+                Ok(atr)
+            }
         }
-        Ok(())
     }
 
     fn configure(&mut self) -> Result<(), trussed::Error> {

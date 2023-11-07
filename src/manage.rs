@@ -7,7 +7,7 @@ use se05x::{
             CreateSession, DeleteAll, GetFreeMemory, GetVersion, ReadIdList, VerifySessionUserId,
             WriteUserId,
         },
-        ObjectId, SecureObjectFilter,
+        Memory, ObjectId, SecureObjectFilter,
     },
     t1::I2CForT1,
 };
@@ -16,6 +16,7 @@ use trussed::{
     serde_extensions::{Extension, ExtensionClient, ExtensionImpl, ExtensionResult},
     service::ServiceResources,
     store::Store,
+    types::Bytes,
     types::CoreContext,
     Error,
 };
@@ -35,10 +36,17 @@ pub struct FactoryResetRequest;
 #[derive(Debug, Deserialize, Serialize, Copy, Clone)]
 pub struct InfoRequest;
 
+/// Test SE050 functionality
+///
+/// This is now a placeholder for the previous test. It is kept to return available space on the SE050
+#[derive(Debug, Deserialize, Serialize, Copy, Clone)]
+pub struct TestSe050Request;
+
 #[derive(Debug, Deserialize, Serialize)]
 pub enum ManageRequest {
     FactoryReset(FactoryResetRequest),
     Info(InfoRequest),
+    TestSe050(TestSe050Request),
 }
 
 impl TryFrom<ManageRequest> for FactoryResetRequest {
@@ -73,6 +81,22 @@ impl From<InfoRequest> for ManageRequest {
     }
 }
 
+impl TryFrom<ManageRequest> for TestSe050Request {
+    type Error = Error;
+    fn try_from(request: ManageRequest) -> Result<Self, Self::Error> {
+        match request {
+            ManageRequest::TestSe050(request) => Ok(request),
+            _ => Err(Error::InternalError),
+        }
+    }
+}
+
+impl From<TestSe050Request> for ManageRequest {
+    fn from(request: TestSe050Request) -> Self {
+        Self::TestSe050(request)
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Copy, Clone)]
 pub struct FactoryResetReply;
 
@@ -92,6 +116,7 @@ pub struct InfoReply {
 pub enum ManageReply {
     FactoryReset(FactoryResetReply),
     Info(InfoReply),
+    TestSe050(TestSe050Reply),
 }
 
 impl TryFrom<ManageReply> for FactoryResetReply {
@@ -123,6 +148,27 @@ impl TryFrom<ManageReply> for InfoReply {
 impl From<InfoReply> for ManageReply {
     fn from(request: InfoReply) -> Self {
         Self::Info(request)
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct TestSe050Reply {
+    pub reply: Bytes<1024>,
+}
+
+impl TryFrom<ManageReply> for TestSe050Reply {
+    type Error = Error;
+    fn try_from(request: ManageReply) -> Result<Self, Self::Error> {
+        match request {
+            ManageReply::TestSe050(request) => Ok(request),
+            _ => Err(Error::InternalError),
+        }
+    }
+}
+
+impl From<TestSe050Reply> for ManageReply {
+    fn from(request: TestSe050Reply) -> Self {
+        Self::TestSe050(request)
     }
 }
 
@@ -244,7 +290,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                 Ok(FactoryResetReply.into())
             }
             ManageRequest::Info(InfoRequest) => {
-                use se05x::se05x::Memory;
                 let buf = &mut [0; 128];
                 let atr = self
                     .se
@@ -306,6 +351,60 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                 }
                 .into())
             }
+            ManageRequest::TestSe050(_) => {
+                let mut buf = [b'a'; 128];
+                let mut reply = Bytes::new();
+                let atr = self.enable()?;
+                let map_err = |_err| {
+                    debug!("Failed to get memory: {_err:?}");
+                    trussed::Error::FunctionFailed
+                };
+                reply
+                    .extend_from_slice(&[
+                        atr.major,
+                        atr.minor,
+                        atr.patch,
+                        atr.secure_box_major,
+                        atr.secure_box_minor,
+                    ])
+                    .ok();
+
+                let mem = self
+                    .se
+                    .run_command(
+                        &GetFreeMemory {
+                            memory: Memory::Persistent,
+                        },
+                        &mut buf,
+                    )
+                    .map_err(map_err)?;
+                reply.extend_from_slice(&mem.available.0.to_be_bytes()).ok();
+                let mem = self
+                    .se
+                    .run_command(
+                        &GetFreeMemory {
+                            memory: Memory::TransientReset,
+                        },
+                        &mut buf,
+                    )
+                    .map_err(map_err)?;
+                reply.extend_from_slice(&mem.available.0.to_be_bytes()).ok();
+                let mem = self
+                    .se
+                    .run_command(
+                        &GetFreeMemory {
+                            memory: Memory::TransientDeselect,
+                        },
+                        &mut buf,
+                    )
+                    .map_err(map_err)?;
+                reply.extend_from_slice(&mem.available.0.to_be_bytes()).ok();
+                for i in 1..113 {
+                    reply.push(i).ok();
+                }
+
+                Ok(TestSe050Reply { reply }.into())
+            }
         }
     }
 }
@@ -323,6 +422,14 @@ pub trait ManageClient: ExtensionClient<ManageExtension> {
     /// Get info on the SE050
     fn get_info(&mut self) -> ManageResult<'_, InfoReply, Self> {
         self.extension(InfoRequest)
+    }
+
+    /// Test the se050 device and driver
+    ///
+    /// This will fake the results of the tests from v0.1.0-test-driver for compatibility but
+    /// return correct metadata header to be shown in the test result
+    fn test_se050(&mut self) -> ManageResult<'_, TestSe050Reply, Self> {
+        self.extension(TestSe050Request)
     }
 }
 
