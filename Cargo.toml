@@ -9,7 +9,7 @@ edition = "2021"
 se05x = { version  = "0.0.1", features = ["serde", "builder"] }
 trussed = { version = "0.1.0", features = ["serde-extensions"] }
 trussed-auth = "0.2.2"
-trussed-staging = { version = "0.1.0", features = ["wrap-key-to-file", "chunked", "encrypted-chunked"] }
+trussed-staging = { version = "0.1.0", features = ["wrap-key-to-file", "manage"] }
 delog = "0.1.6"
 embedded-hal = "0.2.7"
 hkdf = { version = "0.12.3", default-features = false }
@@ -34,7 +34,7 @@ p256-cortex-m4 = { version = "0.1.0-alpha.6", features = ["prehash", "sec1-signa
 se05x = { git = "https://github.com/Nitrokey/se05x.git", rev = "d09a451246a97446f18f61b58d2b3e569b0e58f3"} 
 trussed = { git = "https://github.com/Nitrokey/trussed", rev = "6b9a43fbaaf34fe8d69fac0021f8130dd9a436c9" }
 trussed-auth = { git = "https://github.com/Nitrokey/trussed-auth", rev = "49c13eae6d9a225676191d4776d514848e4eab5b" }
-trussed-staging = { git = "https://github.com/Nitrokey/trussed-staging.git", rev = "c3822d658eff71b98610d2dcb340a048f72d4802" }
+trussed-staging = { git = "https://github.com/nitrokey/trussed-staging.git", rev = "59dda984e42fbbbd9b469c773af08b497b913469" }
 iso7816 = { git = "https://github.com/sosthene-nitrokey/iso7816.git", rev = "82189c9ea9c4420e1e1fcdce362b710c9c7b19c5"}
 
 [features]

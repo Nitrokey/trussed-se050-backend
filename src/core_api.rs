@@ -2294,22 +2294,16 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(reply::Exists { exists })
     }
 
-    fn delete_all_keys(
+    pub(crate) fn delete_all_items(
         &mut self,
-        req: &request::DeleteAllKeys,
-        core_keystore: &mut impl Keystore,
-        se050_keystore: &mut impl Keystore,
+        locations: &[Location],
         ns: NamespaceValue,
-    ) -> Result<reply::DeleteAllKeys, Error> {
-        let core_count = core_keystore.delete_all(req.location)?;
-        let _fs_count = se050_keystore.delete_all(req.location)?;
-        debug!("Deleted core: {core_count}");
-        debug!("Deleted fs: {_fs_count}");
-
+    ) -> Result<usize, Error> {
         let buf = &mut [0; 1024];
         let buf2 = &mut [0; 128];
         let mut count = 0u16;
         let mut offset = 0;
+
         loop {
             let to_delete = self
                 .se
@@ -2343,11 +2337,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 }
                 debug!("In ns");
                 debug!("Got parsed: {parsed_obj_id:02x?}");
-                match (req.location, parsed_obj_id) {
-                    (
-                        Location::Internal | Location::External,
-                        ParsedObjectId::PersistentKey(obj),
-                    ) => {
+                match parsed_obj_id {
+                    ParsedObjectId::PersistentKey(obj)
+                        if locations.contains(&Location::Internal)
+                            || locations.contains(&Location::External) =>
+                    {
                         count += 1;
                         offset = offset.saturating_sub(1);
                         self.se
@@ -2357,7 +2351,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                                 Error::FunctionFailed
                             })?;
                     }
-                    (Location::Volatile, ParsedObjectId::VolatileKey(obj)) => {
+                    ParsedObjectId::VolatileKey(obj) if locations.contains(&Location::Volatile) => {
                         count += 1;
                         offset = offset.saturating_sub(1);
                         self.se
@@ -2367,23 +2361,19 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                                 Error::FunctionFailed
                             })?;
                     }
-                    (Location::Volatile, ParsedObjectId::VolatileRsaKey(obj)) => {
+                    ParsedObjectId::VolatileRsaKey(obj)
+                        if locations.contains(&Location::Volatile) =>
+                    {
                         let deleted_count = self.delete_volatile_rsa_key_on_se050(obj)?;
                         // VolatileRsaKeys can appear twice (intermediary and real key. They should be counted as one)
                         count += if deleted_count == 0 { 0 } else { 1 };
                         offset = offset.saturating_sub(deleted_count);
                     }
-                    (
-                        _,
-                        ParsedObjectId::Pin(_)
-                        | ParsedObjectId::PinWithDerived(_)
-                        | ParsedObjectId::SaltValue(_),
-                    ) => {}
-                    (
-                        Location::Internal | Location::External,
-                        ParsedObjectId::VolatileKey(_) | ParsedObjectId::VolatileRsaKey(_),
-                    ) => {}
-                    (Location::Volatile, ParsedObjectId::PersistentKey(_)) => {}
+                    ParsedObjectId::Pin(_)
+                    | ParsedObjectId::PinWithDerived(_)
+                    | ParsedObjectId::SaltValue(_) => {}
+                    ParsedObjectId::VolatileKey(_) | ParsedObjectId::VolatileRsaKey(_) => {}
+                    ParsedObjectId::PersistentKey(_) => {}
                 }
             }
 
@@ -2391,9 +2381,25 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 break;
             }
         }
+        Ok(count.into())
+    }
+
+    fn delete_all_keys(
+        &mut self,
+        req: &request::DeleteAllKeys,
+        core_keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<reply::DeleteAllKeys, Error> {
+        let core_count = core_keystore.delete_all(req.location)?;
+        let _fs_count = se050_keystore.delete_all(req.location)?;
+        debug!("Deleted core: {core_count}");
+        debug!("Deleted fs: {_fs_count}");
+
+        let count = self.delete_all_items(&[req.location], ns)?;
 
         Ok(reply::DeleteAllKeys {
-            count: core_count + usize::from(count),
+            count: core_count + count,
         })
     }
 
