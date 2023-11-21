@@ -139,7 +139,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                     })?;
                 self.configured = false;
 
-                Ok(manage::FactoryResetDeviceReply.into())
+                // Let the staging backend delete the rest of the data
+                Err(Error::RequestNotAvailable)
             }
             ManageRequest::FactoryResetClient(manage::FactoryResetClientRequest { client }) => {
                 let ns = self.ns.for_client(client).ok_or_else(|| {
@@ -150,7 +151,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                     &[Location::Volatile, Location::External, Location::Internal],
                     ns,
                 )?;
-                Ok(manage::FactoryResetClientReply.into())
+                // Let the staging backend delete the rest of the data
+                Err(Error::RequestNotAvailable)
             }
         }
     }
