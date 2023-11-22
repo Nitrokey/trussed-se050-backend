@@ -402,7 +402,7 @@ mod tests2 {
         let obj_id = PinObjectIdWithDerived::from_value(ObjectId(0x0ABBCCDDu32.to_be_bytes()));
         assert!(ID_RANGE.contains(&u32::from_be_bytes(obj_id.0 .0)));
         assert_eq!(
-            KeyId::from_value(0xCAFE42424242CAFE000400010ABBCCD2u128),
+            KeyId::from_value(0xCAFE42424242CAFE000000040ABBCCD2u128),
             key_id_for_obj(*obj_id, KeyType::Rsa2048)
         );
 
