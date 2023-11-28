@@ -34,7 +34,6 @@ p256-cortex-m4 = { version = "0.1.0-alpha.6", features = ["prehash", "sec1-signa
 trussed = { git = "https://github.com/Nitrokey/trussed", rev = "6b9a43fbaaf34fe8d69fac0021f8130dd9a436c9" }
 trussed-auth = { git = "https://github.com/Nitrokey/trussed-auth", rev = "49c13eae6d9a225676191d4776d514848e4eab5b" }
 trussed-staging = { git = "https://github.com/nitrokey/trussed-staging.git", rev = "59dda984e42fbbbd9b469c773af08b497b913469" }
-iso7816 = { git = "https://github.com/sosthene-nitrokey/iso7816.git", rev = "82189c9ea9c4420e1e1fcdce362b710c9c7b19c5"}
 
 [features]
 default = ["log-all"]
