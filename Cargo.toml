@@ -23,7 +23,7 @@ rand = { version = "0.8.5", default-features = false }
 littlefs2 = "0.4.0"
 cbor-smol = "0.4.0"
 serde_bytes = { version = "0.11.12", default-features = false }
-trussed-rsa-alloc = { git = "https://github.com/Nitrokey/trussed-rsa-backend.git", rev = "2088e2f8a8d706276c1559717b4c6b6d4f270253" }
+trussed-rsa-alloc = "0.1.0"
 postcard = "0.7.3"
 crypto-bigint = { version = "0.5.3", default-features = false }
 p256 = { version = "0.13.2", default-features = false, features = ["ecdsa-core"] }
@@ -33,6 +33,7 @@ p256-cortex-m4 = { version = "0.1.0-alpha.6", features = ["prehash", "sec1-signa
 [patch.crates-io]
 trussed = { git = "https://github.com/Nitrokey/trussed", rev = "6b9a43fbaaf34fe8d69fac0021f8130dd9a436c9" }
 trussed-auth = { git = "https://github.com/Nitrokey/trussed-auth", rev = "49c13eae6d9a225676191d4776d514848e4eab5b" }
+trussed-rsa-alloc = { git = "https://github.com/Nitrokey/trussed-rsa-backend.git", rev = "2088e2f8a8d706276c1559717b4c6b6d4f270253" }
 trussed-staging = { git = "https://github.com/nitrokey/trussed-staging.git", rev = "59dda984e42fbbbd9b469c773af08b497b913469" }
 
 [features]
