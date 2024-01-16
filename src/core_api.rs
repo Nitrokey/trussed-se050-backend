@@ -1164,12 +1164,14 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
     fn decrypt(
         &mut self,
-        req: &request::Decrypt,
+        key: KeyId,
+        mechanism: Mechanism,
+        message: &[u8],
         se050_keystore: &mut impl Keystore,
         ns: NamespaceValue,
     ) -> Result<reply::Decrypt, Error> {
-        let (_bits, kind, raw) = bits_and_kind_from_mechanism(req.mechanism)?;
-        let (key_id, key_type) = parse_key_id(req.key, ns).ok_or(Error::RequestNotAvailable)?;
+        let (_bits, kind, raw) = bits_and_kind_from_mechanism(mechanism)?;
+        let (key_id, key_type) = parse_key_id(key, ns).ok_or(Error::RequestNotAvailable)?;
 
         if !matches!(
             (key_type, kind),
@@ -1186,11 +1188,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         };
 
         match key_id {
-            ParsedObjectId::VolatileRsaKey(key) => {
-                self.rsa_decrypt_volatile(req.key, key, &req.message, se050_keystore, algo, kind)
+            ParsedObjectId::VolatileRsaKey(obj_id) => {
+                self.rsa_decrypt_volatile(key, obj_id, &message, se050_keystore, algo, kind)
             }
-            ParsedObjectId::PersistentKey(key) => {
-                self.rsa_decrypt_persistent(key, &req.message, algo)
+            ParsedObjectId::PersistentKey(obj_id) => {
+                self.rsa_decrypt_persistent(obj_id, &message, algo)
             }
             _ => Err(Error::ObjectHandleInvalid),
         }
@@ -1295,8 +1297,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Mechanism::Rsa2048Pkcs1v15
             | Mechanism::Rsa3072Pkcs1v15
             | Mechanism::Rsa4096Pkcs1v15 => self.rsa_sign(req, se050_keystore, ns),
-            // We don't support `raw` as it is done through encrypt/decrypt anyway
-            // This is an incompatiblity with trussed-rsa-alloc
+            Mechanism::Rsa2048Raw | Mechanism::Rsa3072Raw | Mechanism::Rsa4096Raw => self
+                .decrypt(req.key, req.mechanism, &req.message, se050_keystore, ns)
+                .and_then(|d| {
+                    Ok(reply::Sign {
+                        signature: d.plaintext.ok_or(Error::FunctionFailed)?,
+                    })
+                }),
             _ => Err(Error::MechanismParamInvalid),
         }
     }
@@ -1914,9 +1921,15 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Mechanism::P256 => self.serialize_p256_key(req, core_keystore),
             Mechanism::X255 => self.serialize_x255_key(req, core_keystore),
             Mechanism::Ed255 => self.serialize_ed255_key(req, core_keystore),
-            Mechanism::Rsa2048Pkcs1v15 => self.serialize_rsa_key(req, Kind::Rsa2048, core_keystore),
-            Mechanism::Rsa3072Pkcs1v15 => self.serialize_rsa_key(req, Kind::Rsa3072, core_keystore),
-            Mechanism::Rsa4096Pkcs1v15 => self.serialize_rsa_key(req, Kind::Rsa4096, core_keystore),
+            Mechanism::Rsa2048Pkcs1v15 | Mechanism::Rsa2048Raw => {
+                self.serialize_rsa_key(req, Kind::Rsa2048, core_keystore)
+            }
+            Mechanism::Rsa3072Pkcs1v15 | Mechanism::Rsa3072Raw => {
+                self.serialize_rsa_key(req, Kind::Rsa3072, core_keystore)
+            }
+            Mechanism::Rsa4096Pkcs1v15 | Mechanism::Rsa4096Raw => {
+                self.serialize_rsa_key(req, Kind::Rsa4096, core_keystore)
+            }
             _ => Err(Error::MechanismParamInvalid),
         }
     }
@@ -3003,7 +3016,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 )?
                 .into(),
             Request::Decrypt(req) if supported(req.mechanism) => self
-                .decrypt(req, &mut se050_keystore(resources)?, ns)?
+                .decrypt(
+                    req.key,
+                    req.mechanism,
+                    &req.message,
+                    &mut se050_keystore(resources)?,
+                    ns,
+                )?
                 .into(),
             Request::DeriveKey(req) if supported(req.mechanism) => self
                 .derive_key(
