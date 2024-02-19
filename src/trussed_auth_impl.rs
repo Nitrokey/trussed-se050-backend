@@ -1,6 +1,8 @@
 use core::fmt;
 use embedded_hal::blocking::delay::DelayUs;
 use hkdf::Hkdf;
+use littlefs2::path;
+use littlefs2::path::Path;
 use se05x::{
     se05x::{
         commands::{GetRandom, ReadObject, WriteBinary},
@@ -43,7 +45,7 @@ pub(crate) const KEY_LEN: usize = 32;
 pub(crate) type Key = ByteArray<KEY_LEN>;
 pub(crate) type Salt = ByteArray<SALT_LEN>;
 
-const AUTH_DIR: &str = "auth";
+const AUTH_DIR: &Path = path!("auth");
 
 #[derive(Clone)]
 pub enum HardwareKey {

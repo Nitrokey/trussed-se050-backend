@@ -4,6 +4,7 @@ use core::ops::Range;
 
 use embedded_hal::blocking::delay::DelayUs;
 use hex_literal::hex;
+use littlefs2::path;
 use littlefs2::path::Path;
 use namespacing::{Namespace, NamespaceValue};
 use se05x::{
@@ -27,7 +28,7 @@ pub mod manage;
 pub mod namespacing;
 
 /// Need overhead for TLV + SW bytes
-const BACKEND_DIR: &str = "se050-bak";
+const BACKEND_DIR: &Path = path!("se050-bak");
 
 pub const GLOBAL_ATTEST_ID: ObjectId = ObjectId(hex!("F0000012"));
 
