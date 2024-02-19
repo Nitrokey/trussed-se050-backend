@@ -2992,13 +2992,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
         /// Coerce an FnMut into a FnOnce to ensure the stores are not created twice by mistake
         fn once<R, P>(
-            generator: impl FnMut(&mut ServiceResources<P>, &mut CoreContext) -> R,
+            generator: impl FnOnce(&mut ServiceResources<P>, &mut CoreContext) -> R,
         ) -> impl FnOnce(&mut ServiceResources<P>, &mut CoreContext) -> R {
             generator
         }
 
         let core_keystore = once(|resources, core_ctx| resources.keystore(core_ctx.path.clone()));
-        let se050_keystore = once(|resources, _core_ctx| resources.keystore(backend_path.clone()));
+        let se050_keystore = once(|resources, _core_ctx| resources.keystore(backend_path));
 
         let backend_ctx = backend_ctx.with_namespace(&self.ns, &core_ctx.path);
         let ns = backend_ctx.ns;
