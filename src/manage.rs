@@ -83,6 +83,7 @@ pub struct InfoReply {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[allow(clippy::large_enum_variant)]
 pub enum ManageReply {
     Info(InfoReply),
     TestSe050(TestSe050Reply),
