@@ -25,6 +25,7 @@ mod staging;
 
 mod core_api;
 pub mod manage;
+pub mod migrate;
 pub mod namespacing;
 
 /// Need overhead for TLV + SW bytes

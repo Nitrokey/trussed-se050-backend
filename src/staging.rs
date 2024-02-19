@@ -158,6 +158,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                 // Let the staging backend delete the rest of the data
                 Err(Error::RequestNotAvailable)
             }
+            ManageRequest::Migrate(_) =>
+            // Let the staging backend handle migrations
+            {
+                Err(Error::RequestNotAvailable)
+            }
         }
     }
 }

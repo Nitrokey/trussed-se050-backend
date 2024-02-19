@@ -14,15 +14,13 @@
 |  |- sec
 |  |- pub
 |  |- BACKEND_DIR
-|  |  |- AUTH
-|  |  |  |- dat (`let fs = once(|resources, _| resources.raw_filestore(backend_path))`)
-|  |  |  |  |- pin.XX
-|  |  |  |  |- pin.XX
-|  |  |  |  |- application_salt
+|  |  |- AUTH (`let fs = once(|resources, _| resources.raw_filestore(backend_path))`)
+|  |  |  |- pin.XX
+|  |  |  |- pin.XX
+|  |  |  |- application_salt
 |
-|- BACKEND_DIR
-|  |- dat (`let global_fs = once(|resources, _| resources.raw_filestore(PathBuf::from(BACKEND_DIR)))`)
-|  |  |- salt
+|- BACKEND_DIR (`let global_fs = once(|resources, _| resources.raw_filestore(PathBuf::from(BACKEND_DIR)))`)
+|  |- salt
 ```
 
 ## Core API impl
@@ -52,14 +50,12 @@
 |  |  |- CORE_DIR
 |  |  |  |- sec
 |  |  |  |- pub
-|  |  |- AUTH
-|  |  |  |- dat (`let fs = once(|resources, _| resources.raw_filestore(backend_path))`)
-|  |  |  |  |- pin.XX
-|  |  |  |  |- pin.XX
-|  |  |  |  |- application_salt
+|  |  |- AUTH (`let fs = once(|resources, _| resources.raw_filestore(backend_path))`)
+|  |  |  |- pin.XX
+|  |  |  |- pin.XX
+|  |  |  |- application_salt
 |
-|- BACKEND_DIR
-|  |- dat (`let global_fs = once(|resources, _| resources.raw_filestore(PathBuf::from(BACKEND_DIR)))`)
-|  |  |- salt
+|- BACKEND_DIR (`let global_fs = once(|resources, _| resources.raw_filestore(PathBuf::from(BACKEND_DIR)))`)
+|  |- salt
 ```
 

@@ -45,7 +45,7 @@ pub(crate) const KEY_LEN: usize = 32;
 pub(crate) type Key = ByteArray<KEY_LEN>;
 pub(crate) type Salt = ByteArray<SALT_LEN>;
 
-const AUTH_DIR: &Path = path!("auth");
+pub(crate) const AUTH_DIR: &Path = path!("auth");
 
 #[derive(Clone)]
 pub enum HardwareKey {
@@ -282,9 +282,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
             generator
         }
 
-        let fs = once(|resources, _core_ctx| resources.filestore(backend_path));
-        let global_fs =
-            once(|resources, _core_ctx| resources.filestore(PathBuf::from(BACKEND_DIR)));
+        let fs = once(|resources, _| resources.raw_filestore(backend_path));
+        let global_fs = once(|resources, _| resources.raw_filestore(PathBuf::from(BACKEND_DIR)));
         let client_id = core_ctx.path.clone();
         let keystore = once(|resources, core_ctx| resources.keystore(core_ctx.path.clone()));
 
