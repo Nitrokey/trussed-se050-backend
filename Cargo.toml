@@ -38,7 +38,7 @@ trussed-rsa-alloc = { git = "https://github.com/Nitrokey/trussed-rsa-backend.git
 trussed-staging = { git = "https://github.com/nitrokey/trussed-staging.git", rev = "59dda984e42fbbbd9b469c773af08b497b913469" }
 
 [features]
-default = ["log-all"]
+default = []
 
 log-all = []
 log-none = []
