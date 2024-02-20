@@ -1,6 +1,6 @@
-use littlefs2::{io::Error, object_safe::DynFilesystem, path, path::Path};
+use littlefs2::{io::Error, object_safe::DynFilesystem, path::Path};
 
-use crate::{trussed_auth_impl::AUTH_DIR, BACKEND_DIR};
+use crate::BACKEND_DIR;
 
 // Old:
 //
@@ -27,20 +27,7 @@ use crate::{trussed_auth_impl::AUTH_DIR, BACKEND_DIR};
 // ```
 
 fn migrate_single(fs: &dyn DynFilesystem, path: &Path) -> Result<(), Error> {
-    let path_dat = path.join(path!("dat"));
-    let dir_res = fs.read_dir_and_then(&path_dat, &mut |dir| {
-        for f in dir.skip(2) {
-            let f = f?;
-            let new_path = path.join(f.file_name());
-            fs.rename(f.path(), &new_path)?;
-        }
-        Ok(())
-    });
-    match dir_res {
-        Ok(()) => fs.remove_dir(&path_dat),
-        Err(Error::NoSuchEntry) => Ok(()),
-        Err(_) => dir_res,
-    }
+    fs.remove_dir_all(path)
 }
 
 ///  Migrate the filesystem to remove the `dat` directories
@@ -52,19 +39,19 @@ fn migrate_single(fs: &dyn DynFilesystem, path: &Path) -> Result<(), Error> {
 /// ```rust
 ///# use littlefs2::{fs::Filesystem, const_ram_storage, path};
 ///# use trussed::types::{LfsResult, LfsStorage};
-///# use trussed_se050_backend::migrate::migrate_remove_dat;
+///# use trussed_se050_backend::migrate::migrate_remove_all_dat;
 ///# const_ram_storage!(Storage, 4096);
 ///# let mut storage = Storage::new();
 ///# Filesystem::format(&mut storage);
 ///# Filesystem::mount_and_then(&mut storage, |fs| {
-/// migrate_remove_dat(fs, &[path!("secrets"), path!("opcard")])?;
+/// migrate_remove_all_dat(fs, &[path!("secrets"), path!("opcard")])?;
 ///#     Ok(())
 ///# }).unwrap();
 /// ```
-pub fn migrate_remove_dat(fs: &dyn DynFilesystem, apps: &[&Path]) -> Result<(), Error> {
-    migrate_single(fs, &path!("/").join(BACKEND_DIR))?;
+pub fn migrate_remove_all_dat(fs: &dyn DynFilesystem, apps: &[&Path]) -> Result<(), Error> {
+    migrate_single(fs, BACKEND_DIR)?;
     for p in apps {
-        migrate_single(fs, &p.join(BACKEND_DIR).join(AUTH_DIR))?;
+        migrate_single(fs, &p.join(BACKEND_DIR))?;
     }
     Ok(())
 }
@@ -72,7 +59,10 @@ pub fn migrate_remove_dat(fs: &dyn DynFilesystem, apps: &[&Path]) -> Result<(), 
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
+    use littlefs2::path;
     use trussed_staging::manage::test_utils::{test_migration_one, FsValues};
+
+    use crate::trussed_auth_impl::AUTH_DIR;
 
     use super::*;
 
@@ -142,15 +132,7 @@ mod tests {
         const TEST_AFTER: FsValues = FsValues::Dir(&[
             (
                 path!("opcard"),
-                FsValues::Dir(&[
-                    (path!("dat"), OPCARD_DIR),
-                    (path!("pub"), OPCARD_PUB_DIR),
-                    (BACKEND_DIR, FsValues::Dir(&[(AUTH_DIR, AUTH_OPCARD_DIR)])),
-                ]),
-            ),
-            (
-                BACKEND_DIR,
-                FsValues::Dir(&[(path!("salt"), FsValues::File(16))]),
+                FsValues::Dir(&[(path!("dat"), OPCARD_DIR), (path!("pub"), OPCARD_PUB_DIR)]),
             ),
             (
                 path!("trussed"),
@@ -162,7 +144,7 @@ mod tests {
         ]);
 
         test_migration_one(&TEST_BEFORE, &TEST_AFTER, |fs| {
-            migrate_remove_dat(fs, &[path!("secrets"), path!("opcard")])
+            migrate_remove_all_dat(fs, &[path!("secrets"), path!("opcard")])
         });
     }
 }
