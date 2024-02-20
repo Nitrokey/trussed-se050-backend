@@ -84,6 +84,61 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<WrapKeyToFileExtension>
     }
 }
 
+impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
+    fn factory_reset(&mut self) -> Result<(), Error> {
+        let mut buf = [b'a'; 128];
+        let data = &hex!("31323334");
+
+        self.se
+            .run_command(
+                &WriteUserId {
+                    policy: None,
+                    max_attempts: None,
+                    object_id: ObjectId::FACTORY_RESET,
+                    data,
+                },
+                &mut buf,
+            )
+            .map_err(|_err| {
+                debug!("Failed to write factory reset user id: {_err:?}");
+                Error::FunctionFailed
+            })?;
+        let session = self
+            .se
+            .run_command(
+                &CreateSession {
+                    object_id: ObjectId::FACTORY_RESET,
+                },
+                &mut buf,
+            )
+            .map_err(|_err| {
+                debug!("Failed to create reset session: {_err:?}");
+                Error::FunctionFailed
+            })?;
+
+        self.se
+            .run_session_command(
+                session.session_id,
+                &VerifySessionUserId { user_id: data },
+                &mut buf,
+            )
+            .map_err(|_err| {
+                debug!("Failed to verify reset session: {_err:?}");
+                Error::FunctionFailed
+            })?;
+
+        self.se
+            .run_session_command(session.session_id, &DeleteAll {}, &mut buf)
+            .map_err(|_err| {
+                debug!("Failed to factory reset: {_err:?}");
+                Error::FunctionFailed
+            })?;
+        self.configured = false;
+
+        Ok(())
+    }
+}
+
 impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Backend<Twi, D> {
     fn extension_request<P: trussed::Platform>(
         &mut self,
@@ -94,55 +149,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
     ) -> Result<<ManageExtension as trussed::serde_extensions::Extension>::Reply, Error> {
         match request {
             ManageRequest::FactoryResetDevice(manage::FactoryResetDeviceRequest) => {
-                let mut buf = [b'a'; 128];
-                let data = &hex!("31323334");
-
-                self.se
-                    .run_command(
-                        &WriteUserId {
-                            policy: None,
-                            max_attempts: None,
-                            object_id: ObjectId::FACTORY_RESET,
-                            data,
-                        },
-                        &mut buf,
-                    )
-                    .map_err(|_err| {
-                        debug!("Failed to write factory reset user id: {_err:?}");
-                        Error::FunctionFailed
-                    })?;
-                let session = self
-                    .se
-                    .run_command(
-                        &CreateSession {
-                            object_id: ObjectId::FACTORY_RESET,
-                        },
-                        &mut buf,
-                    )
-                    .map_err(|_err| {
-                        debug!("Failed to create reset session: {_err:?}");
-                        Error::FunctionFailed
-                    })?;
-
-                self.se
-                    .run_session_command(
-                        session.session_id,
-                        &VerifySessionUserId { user_id: data },
-                        &mut buf,
-                    )
-                    .map_err(|_err| {
-                        debug!("Failed to verify reset session: {_err:?}");
-                        Error::FunctionFailed
-                    })?;
-
-                self.se
-                    .run_session_command(session.session_id, &DeleteAll {}, &mut buf)
-                    .map_err(|_err| {
-                        debug!("Failed to factory reset: {_err:?}");
-                        Error::FunctionFailed
-                    })?;
-                self.configured = false;
-
+                self.factory_reset()?;
                 // Let the staging backend delete the rest of the data
                 Err(Error::RequestNotAvailable)
             }
@@ -158,9 +165,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                 // Let the staging backend delete the rest of the data
                 Err(Error::RequestNotAvailable)
             }
-            ManageRequest::Migrate(_) =>
-            // Let the staging backend handle migrations
-            {
+            ManageRequest::Migrate(_) => {
+                self.factory_reset()?;
+                // Let the staging backend handle migrations
                 Err(Error::RequestNotAvailable)
             }
         }
