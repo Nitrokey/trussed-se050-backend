@@ -27,7 +27,11 @@ use crate::BACKEND_DIR;
 // ```
 
 fn migrate_single(fs: &dyn DynFilesystem, path: &Path) -> Result<(), Error> {
-    fs.remove_dir_all(path)
+    match fs.remove_dir_all(path) {
+        Err(Error::NoSuchEntry) => Ok(()),
+        Err(err) => Err(err),
+        Ok(()) => Ok(()),
+    }
 }
 
 ///  Migrate the filesystem to remove the `dat` directories
@@ -144,6 +148,27 @@ mod tests {
         ]);
 
         test_migration_one(&TEST_BEFORE, &TEST_AFTER, |fs| {
+            migrate_remove_all_dat(fs, &[path!("secrets"), path!("opcard")])
+        });
+    }
+
+    #[test]
+    fn migration_emptyt() {
+        const TEST_VALUES: FsValues = FsValues::Dir(&[
+            (
+                path!("opcard"),
+                FsValues::Dir(&[(path!("dat"), OPCARD_DIR), (path!("pub"), OPCARD_PUB_DIR)]),
+            ),
+            (
+                path!("trussed"),
+                FsValues::Dir(&[(
+                    path!("dat"),
+                    FsValues::Dir(&[(path!("rng-state.bin"), FsValues::File(32))]),
+                )]),
+            ),
+        ]);
+
+        test_migration_one(&TEST_VALUES, &TEST_VALUES, |fs| {
             migrate_remove_all_dat(fs, &[path!("secrets"), path!("opcard")])
         });
     }
