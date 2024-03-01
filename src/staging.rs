@@ -51,6 +51,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<WrapKeyToFileExtension>
                         key: req.key,
                         associated_data: Bytes::from_slice(&req.associated_data)
                             .map_err(|_| Error::FunctionFailed)?,
+                        // TODO: add nonce support?
+                        nonce: None,
                     },
                     core_keystore,
                     se050_keystore,
@@ -68,6 +70,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<WrapKeyToFileExtension>
                         wrapping_key: req.key,
                         wrapped_key: data,
                         associated_data: req.associated_data.clone(),
+                        // TODO: add nonce support?
+                        nonce: Default::default(),
                         attributes: StorageAttributes::new().set_persistence(req.key_location),
                     },
                     core_keystore,

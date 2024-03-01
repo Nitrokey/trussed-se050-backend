@@ -31,7 +31,8 @@ salty = "0.3.0"
 p256-cortex-m4 = { version = "0.1.0-alpha.6", features = ["prehash", "sec1-signatures"] }
 
 [patch.crates-io]
-trussed = { git = "https://github.com/Nitrokey/trussed", rev = "6b9a43fbaaf34fe8d69fac0021f8130dd9a436c9" }
+littlefs2 = { git = "https://github.com/trussed-dev/littlefs2.git", rev = "ebd27e49ca321089d01d8c9b169c4aeb58ceeeca" }
+trussed = { git = "https://github.com/Nitrokey/trussed.git", tag = "v0.1.0-nitrokey.18" }
 trussed-auth = { git = "https://github.com/Nitrokey/trussed-auth", rev = "49c13eae6d9a225676191d4776d514848e4eab5b" }
 trussed-rsa-alloc = { git = "https://github.com/Nitrokey/trussed-rsa-backend.git", rev = "2088e2f8a8d706276c1559717b4c6b6d4f270253" }
 trussed-staging = { git = "https://github.com/nitrokey/trussed-staging.git", rev = "59dda984e42fbbbd9b469c773af08b497b913469" }
