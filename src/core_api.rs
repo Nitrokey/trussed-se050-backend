@@ -2084,7 +2084,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             key: req.wrapping_key,
             message,
             associated_data: req.associated_data.clone(),
-            nonce: None,
+            nonce: req.nonce.clone(),
         };
         let encrypted_data =
             <trussed::mechanisms::Chacha8Poly1305 as trussed::service::Encrypt>::encrypt(
