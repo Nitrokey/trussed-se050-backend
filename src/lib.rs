@@ -23,7 +23,7 @@ use trussed_auth_impl::{AuthContext, HardwareKey};
 mod staging;
 
 mod core_api;
-pub mod manage;
+mod manage;
 pub mod namespacing;
 
 /// Need overhead for TLV + SW bytes

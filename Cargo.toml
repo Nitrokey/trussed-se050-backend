@@ -1,15 +1,32 @@
+[workspace]
+members = ["extensions/se050-manage"]
+
+[workspace.package]
+authors = ["Nitrokey GmbH <info@nitrokey.com>"]
+edition = "2021"
+repository = "https://github.com/trussed-dev/trussed-staging"
+license = "Apache-2.0 OR MIT"
+
 [package]
 name = "trussed-se050-backend"
 version = "0.2.0"
-edition = "2021"
+authors.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[workspace.dependencies]
+serde = { version = "1.0.185", default-features = false, features = ["derive"] }
+trussed = { version = "0.1.0", features = ["serde-extensions"] }
 
 [dependencies]
+serde.workspace = true
+trussed.workspace = true
+
 se05x = { version  = "0.1.1", features = ["serde", "builder"] }
-trussed = { version = "0.1.0", features = ["serde-extensions"] }
 trussed-auth = "0.2.2"
 trussed-manage = "0.1.0"
+trussed-se050-manage = "0.1.0"
 trussed-wrap-key-to-file = "0.1.0"
 delog = "0.1.6"
 embedded-hal = "0.2.7"
@@ -19,7 +36,6 @@ hex-literal = "0.4.1"
 serde-byte-array = "0.1.2"
 iso7816 = "0.1.1"
 hmac = "0.12.1"
-serde = { version = "1.0.185", default-features = false, features = ["derive"] }
 rand = { version = "0.8.5", default-features = false }
 littlefs2 = "0.4.0"
 cbor-smol = "0.4.0"
@@ -38,6 +54,8 @@ trussed-auth = { git = "https://github.com/Nitrokey/trussed-auth", rev = "49c13e
 trussed-manage = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "manage-v0.1.0" }
 trussed-rsa-alloc = { git = "https://github.com/Nitrokey/trussed-rsa-backend.git", rev = "2088e2f8a8d706276c1559717b4c6b6d4f270253" }
 trussed-wrap-key-to-file = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "wrap-key-to-file-v0.1.0" }
+
+trussed-se050-manage = { path = "extensions/se050-manage" }
 
 [features]
 default = ["log-all"]

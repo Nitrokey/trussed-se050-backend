@@ -1,0 +1,11 @@
+[package]
+name = "trussed-se050-manage"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+trussed.workspace = true
