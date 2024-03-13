@@ -15,19 +15,19 @@ use trussed::{
     Error,
 };
 use trussed_se050_manage::{
-    InfoReply, InfoRequest, ManageExtension, ManageRequest, TestSe050Reply,
+    InfoReply, InfoRequest, Se050ManageExtension, Se050ManageRequest, TestSe050Reply,
 };
 
 use crate::Se050Backend;
 
-impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Backend<Twi, D> {
+impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<Se050ManageExtension> for Se050Backend<Twi, D> {
     fn extension_request<P: trussed::Platform>(
         &mut self,
         _core_ctx: &mut CoreContext,
         _backend_ctx: &mut Self::Context,
-        request: &<ManageExtension as Extension>::Request,
+        request: &<Se050ManageExtension as Extension>::Request,
         _resources: &mut ServiceResources<P>,
-    ) -> Result<<ManageExtension as Extension>::Reply, Error> {
+    ) -> Result<<Se050ManageExtension as Extension>::Reply, Error> {
         self.configure().map_err(|err| {
             debug!("Failed to enable for management: {err:?}");
             err
@@ -35,7 +35,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
 
         debug!("Runnig manage request: {request:?}");
         match request {
-            ManageRequest::Info(InfoRequest) => {
+            Se050ManageRequest::Info(InfoRequest) => {
                 let buf = &mut [0; 128];
                 let atr = self
                     .se
@@ -97,7 +97,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                 }
                 .into())
             }
-            ManageRequest::TestSe050(_) => {
+            Se050ManageRequest::TestSe050(_) => {
                 let mut buf = [b'a'; 128];
                 let mut reply = Bytes::new();
                 let atr = self.enable()?;

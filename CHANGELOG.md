@@ -6,7 +6,8 @@
 
 - Use extension crates `trussed-manage` and `trussed-wrap-key-to-file` instead
   of backend crate `trussed-staging`, see [trussed-staging#19][].
-- Move `manage::ManageExtension` into `trussed-se050-manage` crate.
+- Move `manage::ManageExtension` into `trussed-se050-manage` crate and rename
+  it to `Se050ManageExtension`.
 
 [trussed-staging#19]: https://github.com/trussed-dev/trussed-staging/pull/19
 
