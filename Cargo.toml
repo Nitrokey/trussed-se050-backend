@@ -9,7 +9,8 @@ edition = "2021"
 se05x = { version  = "0.1.1", features = ["serde", "builder"] }
 trussed = { version = "0.1.0", features = ["serde-extensions"] }
 trussed-auth = "0.2.2"
-trussed-staging = { version = "0.1.0", features = ["wrap-key-to-file", "manage"] }
+trussed-manage = "0.1.0"
+trussed-wrap-key-to-file = "0.1.0"
 delog = "0.1.6"
 embedded-hal = "0.2.7"
 hkdf = { version = "0.12.3", default-features = false }
@@ -34,8 +35,9 @@ p256-cortex-m4 = { version = "0.1.0-alpha.6", features = ["prehash", "sec1-signa
 littlefs2 = { git = "https://github.com/trussed-dev/littlefs2.git", rev = "ebd27e49ca321089d01d8c9b169c4aeb58ceeeca" }
 trussed = { git = "https://github.com/Nitrokey/trussed.git", tag = "v0.1.0-nitrokey.18" }
 trussed-auth = { git = "https://github.com/Nitrokey/trussed-auth", rev = "49c13eae6d9a225676191d4776d514848e4eab5b" }
+trussed-manage = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "manage-v0.1.0" }
 trussed-rsa-alloc = { git = "https://github.com/Nitrokey/trussed-rsa-backend.git", rev = "2088e2f8a8d706276c1559717b4c6b6d4f270253" }
-trussed-staging = { git = "https://github.com/nitrokey/trussed-staging.git", rev = "59dda984e42fbbbd9b469c773af08b497b913469" }
+trussed-wrap-key-to-file = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "wrap-key-to-file-v0.1.0" }
 
 [features]
 default = ["log-all"]

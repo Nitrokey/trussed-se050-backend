@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Use extension crates `trussed-manage` and `trussed-wrap-key-to-file` instead
+  of backend crate `trussed-staging`, see [trussed-staging#19][].
+
+[trussed-staging#19]: https://github.com/trussed-dev/trussed-staging/pull/19
+
 ## [v0.2.0][] (2024-03-04)
 
 [v0.2.0]: https://github.com/Nitrokey/trussed-se050-backend/compare/v0.1.0...v0.2.0

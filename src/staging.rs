@@ -14,8 +14,8 @@ use trussed::{
     types::{CoreContext, StorageAttributes},
     Error,
 };
-use trussed_staging::manage::{self, ManageExtension, ManageRequest};
-use trussed_staging::wrap_key_to_file::{
+use trussed_manage::{ManageExtension, ManageRequest};
+use trussed_wrap_key_to_file::{
     reply as ext_reply, WrapKeyToFileExtension, WrapKeyToFileReply, WrapKeyToFileRequest,
 };
 
@@ -93,7 +93,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
         _resources: &mut ServiceResources<P>,
     ) -> Result<<ManageExtension as trussed::serde_extensions::Extension>::Reply, Error> {
         match request {
-            ManageRequest::FactoryResetDevice(manage::FactoryResetDeviceRequest) => {
+            ManageRequest::FactoryResetDevice(trussed_manage::FactoryResetDeviceRequest) => {
                 let mut buf = [b'a'; 128];
                 let data = &hex!("31323334");
 
@@ -146,7 +146,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                 // Let the staging backend delete the rest of the data
                 Err(Error::RequestNotAvailable)
             }
-            ManageRequest::FactoryResetClient(manage::FactoryResetClientRequest { client }) => {
+            ManageRequest::FactoryResetClient(trussed_manage::FactoryResetClientRequest {
+                client,
+            }) => {
                 let ns = self.ns.for_client(client).ok_or_else(|| {
                     debug_now!("Attempt to factory reset client not handled by the SE050 backend");
                     Error::RequestNotAvailable
