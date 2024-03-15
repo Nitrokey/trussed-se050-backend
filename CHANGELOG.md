@@ -1,15 +1,23 @@
 # Changelog
 
-## Unreleased
+## [Unreleased][]
+
+-
+
+[Unreleased]: https://github.com/trussed-dev/trussed-staging/compare/v0.3.0...HEAD
+
+## [v0.3.0][] (2024-03-15)
+
+[v0.3.0]: https://github.com/Nitrokey/trussed-se050-backend/compare/v0.2.0...v0.3.0
 
 ### Changed
 
 - Use extension crates `trussed-manage` and `trussed-wrap-key-to-file` instead
-  of backend crate `trussed-staging`, see [trussed-staging#19][].
+  of backend crate `trussed-staging` ([#13][])
 - Move `manage::ManageExtension` into `trussed-se050-manage` crate and rename
-  it to `Se050ManageExtension`.
+  it to `Se050ManageExtension` ([#13][])
 
-[trussed-staging#19]: https://github.com/trussed-dev/trussed-staging/pull/19
+[#13]: https://github.com/Nitrokey/trussed-se050-backend/pull/13
 
 ## [v0.2.0][] (2024-03-04)
 
