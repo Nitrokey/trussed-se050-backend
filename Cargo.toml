@@ -24,7 +24,7 @@ serde.workspace = true
 trussed.workspace = true
 
 se05x = { version  = "0.1.1", features = ["serde", "builder"] }
-trussed-auth = "0.2.2"
+trussed-auth = "0.3.0"
 trussed-manage = "0.1.0"
 trussed-se050-manage = "0.1.0"
 trussed-wrap-key-to-file = "0.1.0"
@@ -53,7 +53,7 @@ littlefs2 = { git = "https://github.com/trussed-dev/littlefs2.git", rev = "ebd27
 apdu-dispatch = { git = "https://github.com/trussed-dev/apdu-dispatch.git", rev = "915fc237103fcecc29d0f0b73391f19abf6576de" }
 ctaphid-dispatch = { git = "https://github.com/trussed-dev/ctaphid-dispatch.git", rev = "57cb3317878a8593847595319aa03ef17c29ec5b" }
 trussed = { git = "https://github.com/Nitrokey/trussed.git", rev = "dd7836a155c78e93a2087611666e60308ed8ff1d" }
-trussed-auth = { git = "https://github.com/Nitrokey/trussed-auth", rev = "49c13eae6d9a225676191d4776d514848e4eab5b" }
+trussed-auth = { git = "https://github.com/trussed-dev/trussed-auth.git", tag = "v0.3.0"}
 trussed-manage = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "manage-v0.1.0" }
 trussed-rsa-alloc = { git = "https://github.com/Nitrokey/trussed-rsa-backend.git", rev = "2088e2f8a8d706276c1559717b4c6b6d4f270253" }
 trussed-wrap-key-to-file = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "wrap-key-to-file-v0.1.0" }
