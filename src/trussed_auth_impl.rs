@@ -282,8 +282,14 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
             generator
         }
 
-        let fs = once(|resources, _| resources.raw_filestore(backend_path));
-        let global_fs = once(|resources, _| resources.raw_filestore(PathBuf::from(BACKEND_DIR)));
+        let fs = once(|resources, _| match self.layout {
+            crate::FilesystemLayout::V0 => resources.filestore(backend_path),
+            crate::FilesystemLayout::V1 => resources.raw_filestore(backend_path),
+        });
+        let global_fs = once(|resources, _| match self.layout {
+            crate::FilesystemLayout::V0 => resources.filestore(PathBuf::from(BACKEND_DIR)),
+            crate::FilesystemLayout::V1 => resources.raw_filestore(PathBuf::from(BACKEND_DIR)),
+        });
         let client_id = core_ctx.path.clone();
         let keystore = once(|resources, core_ctx| resources.keystore(core_ctx.path.clone()));
 

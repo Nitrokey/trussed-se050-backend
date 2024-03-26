@@ -53,6 +53,12 @@ enum EnableState {
     Failed(se05x::se05x::Error),
 }
 
+#[derive(Clone, Debug)]
+pub enum FilesystemLayout {
+    V0,
+    V1,
+}
+
 pub struct Se050Backend<Twi, D> {
     se: Se05X<Twi, D>,
     enabled: EnableState,
@@ -60,6 +66,7 @@ pub struct Se050Backend<Twi, D> {
     hw_key: HardwareKey,
     ns: Namespace,
     configured: bool,
+    layout: FilesystemLayout,
 }
 
 impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
@@ -68,6 +75,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         metadata_location: Location,
         hardware_key: Option<Bytes<{ MAX_HW_KEY_LEN }>>,
         ns: Namespace,
+        layout: FilesystemLayout,
     ) -> Self {
         Se050Backend {
             se,
@@ -79,6 +87,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             },
             ns,
             configured: false,
+            layout,
         }
     }
 
