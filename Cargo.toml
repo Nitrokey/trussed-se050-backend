@@ -57,7 +57,7 @@ trussed-auth = { git = "https://github.com/trussed-dev/trussed-auth.git", tag = 
 trussed-manage = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "manage-v0.1.0" }
 trussed-rsa-alloc = { git = "https://github.com/Nitrokey/trussed-rsa-backend.git", rev = "2088e2f8a8d706276c1559717b4c6b6d4f270253" }
 trussed-wrap-key-to-file = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "wrap-key-to-file-v0.1.0" }
-admin-app = { git = "https://github.com/Nitrokey/admin-app.git", rev = "9f832f3b7f79108353b82e28f78449f10883abdc" }
+admin-app = { git = "https://github.com/Nitrokey/admin-app.git", tag = "v0.1.0-nitrokey.12" }
 
 trussed-se050-manage = { path = "extensions/se050-manage" }
 
