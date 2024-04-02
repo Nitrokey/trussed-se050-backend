@@ -71,6 +71,7 @@ pub struct InfoReply {
     pub transient_reset: u16,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Deserialize, Serialize)]
 pub enum Se050ManageReply {
     Info(InfoReply),
