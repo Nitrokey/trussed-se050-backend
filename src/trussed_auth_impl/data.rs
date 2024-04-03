@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use serde_byte_array::ByteArray;
 use sha2::Sha256;
 use trussed::{
+    api::NotBefore,
     platform::CryptoRng,
     service::{Filestore, RngCore},
     types::{Bytes, Location, Path, PathBuf},
@@ -611,7 +612,7 @@ pub(crate) fn delete_all_pins<Twi: I2CForT1, D: DelayUs<u32>>(
 ) -> Result<(), Error> {
     debug!("Deleting all pins");
     while let Some((entry, _)) = fs
-        .read_dir_first(path!(""), location, None)
+        .read_dir_first(path!(""), location, &NotBefore::None)
         .map_err(|_| Error::ReadFailed)?
     {
         debug!("Deleting {}", entry.path());
