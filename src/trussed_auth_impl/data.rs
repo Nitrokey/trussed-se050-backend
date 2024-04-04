@@ -10,7 +10,7 @@ use embedded_hal::blocking::delay::DelayUs;
 use hex_literal::hex;
 use hmac::{Hmac, Mac};
 use littlefs2::path;
-use rand::Rng;
+use rand::{CryptoRng, Rng, RngCore};
 use se05x::{
     se05x::{
         commands::{
@@ -28,8 +28,7 @@ use serde_byte_array::ByteArray;
 use sha2::Sha256;
 use trussed::{
     api::NotBefore,
-    platform::CryptoRng,
-    service::{Filestore, RngCore},
+    service::{Filestore},
     types::{Bytes, Location, Path, PathBuf},
 };
 use trussed_auth::{request, PinId, MAX_PIN_LENGTH};

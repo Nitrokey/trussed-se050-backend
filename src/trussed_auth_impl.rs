@@ -1,6 +1,7 @@
 use core::fmt;
 use embedded_hal::blocking::delay::DelayUs;
 use hkdf::Hkdf;
+use rand::{CryptoRng, RngCore};
 use se05x::{
     se05x::{
         commands::{GetRandom, ReadObject, WriteBinary},
@@ -12,11 +13,9 @@ use serde_byte_array::ByteArray;
 use sha2::Sha256;
 use trussed::{
     key::{Kind, Secrecy},
-    platform::CryptoRng,
     serde_extensions::ExtensionImpl,
-    service::{Filestore, Keystore, RngCore},
-    types::{Location, PathBuf},
-    Bytes,
+    service::{Filestore, Keystore},
+    types::{Bytes, Location, PathBuf},
 };
 use trussed_auth::MAX_HW_KEY_LEN;
 

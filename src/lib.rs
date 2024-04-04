@@ -10,7 +10,7 @@ use se05x::{
     se05x::{commands::ReadEcCurveList, Atr, EcCurve, ObjectId, Se05X},
     t1::I2CForT1,
 };
-use trussed::{types::Location, Bytes};
+use trussed::types::{Bytes, Location};
 
 #[macro_use]
 extern crate delog;

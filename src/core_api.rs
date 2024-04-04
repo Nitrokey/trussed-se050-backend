@@ -30,8 +30,8 @@ use trussed::{
     config::MAX_MESSAGE_LENGTH,
     key::{self, Kind, Secrecy},
     service::{Keystore, ServiceResources},
-    types::{CoreContext, KeyId, KeySerialization, Location, Mechanism, Message},
-    Bytes, Error,
+    types::{Bytes, CoreContext, KeyId, KeySerialization, Location, Mechanism, Message},
+    Error,
 };
 use trussed_rsa_alloc::{RsaImportFormat, RsaPublicParts};
 
