@@ -49,10 +49,10 @@ p256-cortex-m4 = { version = "0.1.0-alpha.6", features = ["prehash", "sec1-signa
 admin-app = "0.1.0"
 
 [patch.crates-io]
-littlefs2 = { git = "https://github.com/trussed-dev/littlefs2.git", rev = "ebd27e49ca321089d01d8c9b169c4aeb58ceeeca" }
+littlefs2 = { git = "https://github.com/trussed-dev/littlefs2.git", rev = "960e57d9fc0d209308c8e15dc26252bbe1ff6ba8" }
 apdu-dispatch = { git = "https://github.com/trussed-dev/apdu-dispatch.git", rev = "915fc237103fcecc29d0f0b73391f19abf6576de" }
 ctaphid-dispatch = { git = "https://github.com/trussed-dev/ctaphid-dispatch.git", rev = "57cb3317878a8593847595319aa03ef17c29ec5b" }
-trussed = { git = "https://github.com/Nitrokey/trussed.git", rev = "dd7836a155c78e93a2087611666e60308ed8ff1d" }
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "667d60c019d485524a276f2a4dd07aaa66e71021" }
 trussed-auth = { git = "https://github.com/trussed-dev/trussed-auth.git", tag = "v0.3.0"}
 trussed-manage = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "manage-v0.1.0" }
 trussed-rsa-alloc = { git = "https://github.com/Nitrokey/trussed-rsa-backend.git", rev = "2088e2f8a8d706276c1559717b4c6b6d4f270253" }
