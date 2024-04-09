@@ -2,7 +2,9 @@
 
 ## [Unreleased][]
 
--
+- Add implementation of the `trussed-hpke` extension ([#36][])
+
+[#36]: https://github.com/Nitrokey/trussed-se050-backend/pull/36
 
 [Unreleased]: https://github.com/trussed-dev/trussed-staging/compare/v0.3.0...HEAD
 
