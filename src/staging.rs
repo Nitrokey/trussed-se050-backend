@@ -2,9 +2,13 @@ use embedded_hal::blocking::delay::DelayUs;
 use hex_literal::hex;
 
 use littlefs2::path::PathBuf;
-use se05x::se05x::commands::{CreateSession, DeleteAll, VerifySessionUserId, WriteUserId};
-use se05x::se05x::ObjectId;
+use se05x::se05x::commands::{
+    CreateSession, DeleteAll, VerifySessionUserId, WriteEcKey, WriteUserId,
+};
+use se05x::se05x::policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet};
+use se05x::se05x::{EcCurve, ObjectId, P1KeyType};
 use se05x::t1::I2CForT1;
+use trussed::service::Keystore;
 use trussed::types::Location;
 use trussed::{
     api::{reply::UnwrapKey, request},
@@ -14,12 +18,16 @@ use trussed::{
     types::{CoreContext, StorageAttributes},
     Error,
 };
+use trussed_hpke::HpkeExtension;
 use trussed_manage::{ManageExtension, ManageRequest};
 use trussed_wrap_key_to_file::{
     reply as ext_reply, WrapKeyToFileExtension, WrapKeyToFileReply, WrapKeyToFileRequest,
 };
 
+use crate::namespacing::{NamespaceValue, VolatileObjectId};
 use crate::{core_api::CORE_DIR, Se050Backend, BACKEND_DIR};
+
+mod hpke;
 
 impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<WrapKeyToFileExtension>
     for Se050Backend<Twi, D>
@@ -161,5 +169,65 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                 Err(Error::RequestNotAvailable)
             }
         }
+    }
+}
+
+const POLICY: PolicySet<'static> = PolicySet(&[Policy {
+    object_id: ObjectId::INVALID,
+    access_rule: ObjectAccessRule::from_flags(
+        // We use `.union` rather than `|` for const
+        ObjectPolicyFlags::ALLOW_READ
+            .union(ObjectPolicyFlags::ALLOW_WRITE)
+            .union(ObjectPolicyFlags::ALLOW_DELETE)
+            .union(ObjectPolicyFlags::ALLOW_IMPORT_EXPORT)
+            .union(ObjectPolicyFlags::ALLOW_VERIFY)
+            .union(ObjectPolicyFlags::ALLOW_KA)
+            .union(ObjectPolicyFlags::ALLOW_ENC)
+            .union(ObjectPolicyFlags::ALLOW_DEC)
+            .union(ObjectPolicyFlags::ALLOW_SIGN),
+    ),
+}]);
+
+impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
+    fn hpke_encap(
+        &mut self,
+        se050_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<(hpke::SharedSecret, hpke::PublicKey), Error> {
+        let object_id = VolatileObjectId::new(se050_keystore.rng(), ns);
+        let buf = &mut [0; 100];
+        self.se
+            .run_command(
+                WriteEcKey::builder()
+                    .transient(true)
+                    .key_type(P1KeyType::KeyPair)
+                    .policy(POLICY)
+                    .object_id(*object_id)
+                    .curve(EcCurve::IdEccMontDh25519)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                // error!("Failed to generate volatile key: {_err:?}");
+                error!("Failed to generate volatile key: {_err:?}",);
+                Error::FunctionFailed
+            })?;
+
+        todo!()
+    }
+    fn hpke_decap(&mut self, se050_keystore: &mut impl Keystore, ns: NamespaceValue) {
+        todo!()
+    }
+}
+
+impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<HpkeExtension> for Se050Backend<Twi, D> {
+    fn extension_request<P: trussed::Platform>(
+        &mut self,
+        core_ctx: &mut CoreContext,
+        backend_ctx: &mut Self::Context,
+        request: &<HpkeExtension as trussed::serde_extensions::Extension>::Request,
+        resources: &mut ServiceResources<P>,
+    ) -> Result<<HpkeExtension as trussed::serde_extensions::Extension>::Reply, Error> {
+        todo!()
     }
 }
