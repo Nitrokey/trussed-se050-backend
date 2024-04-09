@@ -445,7 +445,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     /// Put a volatile key stored on the filesystem back into the SE050
     ///
     /// This is used to perform one operation, the key must then be cleared again with [`clear_volatile_key`](Se050Backend::clear_volatile_key)
-    fn reimport_volatile_key(
+    pub(crate) fn reimport_volatile_key(
         &mut self,
         key: KeyId,
         kind: Kind,
@@ -775,7 +775,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(reply::DeriveKey { key })
     }
 
-    fn clear_volatile_key(&mut self, object_id: ObjectId) -> Result<(), Error> {
+    pub(crate) fn clear_volatile_key(&mut self, object_id: ObjectId) -> Result<(), Error> {
         self.se
             .run_command(&DeleteSecureObject { object_id }, &mut [0; 128])
             .map_err(|_err| {

@@ -2,10 +2,16 @@ use embedded_hal::blocking::delay::DelayUs;
 use hex_literal::hex;
 
 use littlefs2::path::PathBuf;
-use se05x::se05x::commands::{CreateSession, DeleteAll, VerifySessionUserId, WriteUserId};
-use se05x::se05x::ObjectId;
+use se05x::se05x::commands::{
+    CreateSession, DeleteAll, EcdhGenerateSharedSecret, ReadObject, VerifySessionUserId,
+    WriteEcKey, WriteUserId,
+};
+use se05x::se05x::policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet};
+use se05x::se05x::{EcCurve, ObjectId, P1KeyType};
 use se05x::t1::I2CForT1;
-use trussed::types::Location;
+use trussed::key;
+use trussed::service::Keystore;
+use trussed::types::{KeyId, Location};
 use trussed::{
     api::{reply::UnwrapKey, request},
     serde_extensions::ExtensionImpl,
@@ -14,13 +20,23 @@ use trussed::{
     types::{CoreContext, StorageAttributes},
     Error,
 };
+use trussed_hpke::{HpkeExtension, HpkeOpenReply, HpkeRequest, HpkeSealReply};
 use trussed_manage::{ManageExtension, ManageRequest};
 use trussed_wrap_key_to_file::{
     reply as ext_reply, WrapKeyToFileExtension, WrapKeyToFileReply, WrapKeyToFileRequest,
 };
 
-use crate::core_api::ItemsToDelete;
-use crate::{core_api::CORE_DIR, Se050Backend, BACKEND_DIR};
+use crate::{
+    core_api::{ItemsToDelete, CORE_DIR},
+    namespacing::{
+        parse_key_id, KeyType, NamespaceValue, ParsedObjectId, PersistentObjectId, VolatileObjectId,
+    },
+    Se050Backend, BACKEND_DIR,
+};
+
+use self::hpke::extract_and_expand;
+
+mod hpke;
 
 impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<WrapKeyToFileExtension>
     for Se050Backend<Twi, D>
@@ -32,6 +48,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<WrapKeyToFileExtension>
         request: &WrapKeyToFileRequest,
         resources: &mut ServiceResources<P>,
     ) -> Result<WrapKeyToFileReply, Error> {
+        self.configure()?;
+
         // FIXME: Have a real implementation from trussed
         let mut backend_path = core_ctx.path.clone();
         backend_path.push(&PathBuf::from(BACKEND_DIR));
@@ -162,6 +180,294 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                 // Let the staging backend delete the rest of the data
                 Err(Error::RequestNotAvailable)
             }
+        }
+    }
+}
+
+const POLICY: PolicySet<'static> = PolicySet(&[Policy {
+    object_id: ObjectId::INVALID,
+    access_rule: ObjectAccessRule::from_flags(
+        // We use `.union` rather than `|` for const
+        ObjectPolicyFlags::ALLOW_READ
+            .union(ObjectPolicyFlags::ALLOW_WRITE)
+            .union(ObjectPolicyFlags::ALLOW_DELETE)
+            .union(ObjectPolicyFlags::ALLOW_IMPORT_EXPORT)
+            .union(ObjectPolicyFlags::ALLOW_VERIFY)
+            .union(ObjectPolicyFlags::ALLOW_KA)
+            .union(ObjectPolicyFlags::ALLOW_ENC)
+            .union(ObjectPolicyFlags::ALLOW_DEC)
+            .union(ObjectPolicyFlags::ALLOW_SIGN),
+    ),
+}]);
+
+impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
+    fn hpke_encap(
+        &mut self,
+        pkr: KeyId,
+        core_keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<(hpke::SharedSecret, hpke::PublicKey), Error> {
+        let pkr = core_keystore.load_key(key::Secrecy::Public, Some(key::Kind::X255), &pkr)?;
+
+        let enc_object_id = VolatileObjectId::new(se050_keystore.rng(), ns);
+        let buf = &mut [0; 128];
+        self.se
+            .run_command(
+                &WriteEcKey::builder()
+                    .transient(true)
+                    .key_type(P1KeyType::KeyPair)
+                    .policy(POLICY)
+                    .object_id(*enc_object_id)
+                    .curve(EcCurve::IdEccMontDh25519)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error!("Failed to generate volatile key: {_err:?}",);
+                Error::FunctionFailed
+            })?;
+        let enc = self
+            .se
+            .run_command(
+                &ReadObject::builder().object_id(*enc_object_id).build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error!("Failed to read generated key: {_err:?}",);
+                Error::FunctionFailed
+            })?;
+        let enc: hpke::PublicKey = enc.data.try_into()?;
+        let dh = self
+            .se
+            .run_command(
+                &EcdhGenerateSharedSecret::builder()
+                    .key_id(*enc_object_id)
+                    .public_key(&pkr.material)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error!("Failed to generate shared secret: {_err:?}",);
+                Error::FunctionFailed
+            })?;
+
+        let dh: hpke::SharedSecret = dh.shared_secret.try_into()?;
+
+        let kem_context = &mut [0; 64];
+        kem_context[0..32].copy_from_slice(&*enc);
+        kem_context[32..].copy_from_slice(&pkr.material);
+        let shared_secret = hpke::extract_and_expand(dh, kem_context).into();
+        Ok((shared_secret, enc))
+    }
+
+    fn hpke_setup_base_s(
+        &mut self,
+        pkr: KeyId,
+        info: &[u8],
+        core_keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<(hpke::PublicKey, hpke::Context), Error> {
+        let (shared_secret, enc) = self.hpke_encap(pkr, core_keystore, se050_keystore, ns)?;
+        let ctx = hpke::key_schedule(shared_secret, info);
+        Ok((enc, ctx))
+    }
+
+    fn hpke_seal(
+        &mut self,
+        pkr: KeyId,
+        info: &[u8],
+        aad: &[u8],
+        ciphertext: &mut [u8],
+        core_keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<(hpke::PublicKey, [u8; hpke::TAG_LEN]), Error> {
+        let (enc, ctx) = self.hpke_setup_base_s(pkr, info, core_keystore, se050_keystore, ns)?;
+        let tag = ctx.seal_in_place_detached(aad, ciphertext);
+        return Ok((enc, tag));
+    }
+
+    fn hpke_decap(
+        &mut self,
+        private_key: KeyId,
+        enc: hpke::PublicKey,
+        se050_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<hpke::SharedSecret, Error> {
+        let (priv_parsed_key, priv_parsed_ty) =
+            parse_key_id(private_key, ns).ok_or(Error::RequestNotAvailable)?;
+
+        if !matches!(priv_parsed_ty, KeyType::X255) {
+            return Err(Error::WrongKeyKind);
+        }
+
+        if let ParsedObjectId::VolatileKey(priv_volatile) = priv_parsed_key {
+            self.reimport_volatile_key(
+                private_key,
+                key::Kind::X255,
+                se050_keystore,
+                priv_volatile.0,
+            )?;
+        }
+
+        let (ParsedObjectId::VolatileKey(VolatileObjectId(priv_obj))
+        | ParsedObjectId::PersistentKey(PersistentObjectId(priv_obj))) = priv_parsed_key
+        else {
+            return Err(Error::MechanismParamInvalid);
+        };
+
+        let buf = &mut [0; 128];
+
+        let dh = self
+            .se
+            .run_command(
+                &EcdhGenerateSharedSecret::builder()
+                    .key_id(priv_obj)
+                    .public_key(&*enc)
+                    .build(),
+                buf,
+            )
+            .map_err(|_err| {
+                error!("Failed to generate shared secret: {_err:?}",);
+                Error::FunctionFailed
+            })?;
+
+        let dh: hpke::SharedSecret = dh.shared_secret.try_into()?;
+
+        let pkr = self
+            .se
+            .run_command(&ReadObject::builder().object_id(priv_obj).build(), buf)
+            .map_err(|_err| {
+                error!("Failed to read generated key: {_err:?}",);
+                Error::FunctionFailed
+            })?;
+        let pkr: hpke::PublicKey = pkr.data.try_into()?;
+
+        let kem_context = &mut [0; 64];
+        kem_context[0..32].copy_from_slice(&*enc);
+        kem_context[32..].copy_from_slice(&*pkr);
+        let shared_secret = extract_and_expand(dh, kem_context).into();
+
+        if let ParsedObjectId::VolatileKey(k) = priv_parsed_key {
+            self.clear_volatile_key(k.0)?;
+        }
+
+        Ok(shared_secret)
+    }
+
+    fn hpke_setup_base_r(
+        &mut self,
+        pkr: KeyId,
+        enc: hpke::PublicKey,
+        info: &[u8],
+        se050_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<hpke::Context, Error> {
+        let shared_secret = self.hpke_decap(pkr, enc, se050_keystore, ns)?;
+        let context = hpke::key_schedule(shared_secret, info);
+        Ok(context)
+    }
+
+    fn hpke_open(
+        &mut self,
+        pkr: KeyId,
+        enc: hpke::PublicKey,
+        info: &[u8],
+        aad: &[u8],
+        ciphertext: &mut [u8],
+        tag: [u8; hpke::TAG_LEN],
+        se050_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<(), Error> {
+        let ctx = self.hpke_setup_base_r(pkr, enc, info, se050_keystore, ns)?;
+        ctx.open_in_place_detached(aad, ciphertext, tag)
+            .map_err(|_| Error::AeadError)?;
+        return Ok(());
+    }
+}
+
+fn load_hpke_public_key(
+    key_id: &KeyId,
+    keystore: &mut impl Keystore,
+) -> Result<hpke::PublicKey, trussed::Error> {
+    let public_bytes: [u8; 32] = keystore
+        .load_key(key::Secrecy::Public, Some(key::Kind::X255), key_id)?
+        .material
+        .as_slice()
+        .try_into()
+        .map_err(|_| trussed::Error::InternalError)?;
+    Ok(public_bytes.into())
+}
+
+impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<HpkeExtension> for Se050Backend<Twi, D> {
+    fn extension_request<P: trussed::Platform>(
+        &mut self,
+        core_ctx: &mut CoreContext,
+        backend_ctx: &mut Self::Context,
+        request: &<HpkeExtension as trussed::serde_extensions::Extension>::Request,
+        resources: &mut ServiceResources<P>,
+    ) -> Result<<HpkeExtension as trussed::serde_extensions::Extension>::Reply, Error> {
+        self.configure()?;
+
+        // FIXME: Have a real implementation from trussed
+        let mut backend_path = core_ctx.path.clone();
+        backend_path.push(&PathBuf::from(BACKEND_DIR));
+        backend_path.push(&PathBuf::from(CORE_DIR));
+
+        let core_keystore = &mut resources.keystore(core_ctx.path.clone())?;
+        let se050_keystore = &mut resources.keystore(backend_path.clone())?;
+
+        let backend_ctx = backend_ctx.with_namespace(&self.ns, &core_ctx.path);
+        let ns = backend_ctx.ns;
+
+        match request {
+            HpkeRequest::Seal(req) => {
+                let mut pt = req.plaintext.clone();
+                let (pk, tag) = self.hpke_seal(
+                    req.key,
+                    &req.info,
+                    &req.aad,
+                    &mut pt,
+                    core_keystore,
+                    se050_keystore,
+                    ns,
+                )?;
+                let enc = core_keystore.store_key(
+                    req.enc_location,
+                    key::Secrecy::Public,
+                    key::Kind::X255,
+                    &*pk,
+                )?;
+                Ok(HpkeSealReply {
+                    enc,
+                    ciphertext: pt,
+                    tag: tag.into(),
+                }
+                .into())
+            }
+            HpkeRequest::SealKey(req) => todo!(),
+            HpkeRequest::SealKeyToFile(req) => todo!(),
+            HpkeRequest::Open(req) => {
+                let mut ct = req.ciphertext.clone();
+                let enc = load_hpke_public_key(&req.enc_key, core_keystore)?;
+                self.hpke_open(
+                    req.key,
+                    enc,
+                    &req.info,
+                    &req.aad,
+                    &mut ct,
+                    req.tag.into(),
+                    se050_keystore,
+                    ns,
+                )?;
+
+                Ok(HpkeOpenReply { plaintext: ct }.into())
+            }
+            HpkeRequest::OpenKey(req) => todo!(),
+            HpkeRequest::OpenKeyFromFile(req) => todo!(),
+            _ => todo!(),
         }
     }
 }
