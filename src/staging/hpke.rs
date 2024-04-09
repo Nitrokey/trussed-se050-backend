@@ -1,3 +1,5 @@
+use core::ops::Deref;
+
 use chacha20poly1305::{aead, AeadInPlace, ChaCha8Poly1305, KeyInit};
 
 type HkdfSha256 = hkdf::Hkdf<sha2::Sha256>;
@@ -10,7 +12,7 @@ const NK: usize = 32;
 const NN: usize = 12;
 const NH: usize = 32;
 
-const TAG_LEN: usize = 16;
+pub const TAG_LEN: usize = 16;
 
 fn labeled_extract(
     suite_id: &[u8],
@@ -44,6 +46,55 @@ fn labeled_expand(
 }
 
 pub struct SharedSecret([u8; 32]);
+pub struct PublicKey([u8; 32]);
+
+impl TryFrom<&[u8]> for SharedSecret {
+    type Error = trussed::Error;
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        Ok(Self(
+            value
+                .try_into()
+                .map_err(|_| trussed::Error::InternalError)?,
+        ))
+    }
+}
+
+impl From<[u8; 32]> for SharedSecret {
+    fn from(value: [u8; 32]) -> Self {
+        Self(value)
+    }
+}
+
+impl Deref for SharedSecret {
+    type Target = [u8; 32];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl TryFrom<&[u8]> for PublicKey {
+    type Error = trussed::Error;
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        Ok(Self(
+            value
+                .try_into()
+                .map_err(|_| trussed::Error::InternalError)?,
+        ))
+    }
+}
+
+impl From<[u8; 32]> for PublicKey {
+    fn from(value: [u8; 32]) -> Self {
+        Self(value)
+    }
+}
+
+impl Deref for PublicKey {
+    type Target = [u8; 32];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 pub fn extract_and_expand(dh: SharedSecret, kem_context: &[u8]) -> [u8; 32] {
     let (prk, _) = labeled_extract(X25519_KEM_SUITE_ID, b"", b"eae_prk", &dh.0);
@@ -59,7 +110,7 @@ pub fn extract_and_expand(dh: SharedSecret, kem_context: &[u8]) -> [u8; 32] {
     shr
 }
 
-struct Context {
+pub struct Context {
     key: [u8; NK],
     base_nonce: [u8; NN],
     /// Used only in tests for comparison with the test vectors
@@ -70,7 +121,7 @@ struct Context {
 }
 
 impl Context {
-    fn seal_in_place_detached(self, aad: &[u8], plaintext: &mut [u8]) -> [u8; TAG_LEN] {
+    pub fn seal_in_place_detached(self, aad: &[u8], plaintext: &mut [u8]) -> [u8; TAG_LEN] {
         // We don't increment because the simplified API only allows 1 encryption
         let nonce = (&self.base_nonce).into();
         let aead = ChaCha8Poly1305::new((&self.key).into());
@@ -81,7 +132,7 @@ impl Context {
         tag.into()
     }
 
-    fn open_in_place_detached(
+    pub fn open_in_place_detached(
         self,
         aad: &[u8],
         ciphertext: &mut [u8],
@@ -93,7 +144,7 @@ impl Context {
     }
 }
 
-fn key_schedule(shared_secret: [u8; 32], info: &[u8]) -> Context {
+pub fn key_schedule(shared_secret: SharedSecret, info: &[u8]) -> Context {
     let (_, psk_id_hash) = labeled_extract(
         X25519_HKDF_CHACHA8POLY1305_HPKE_SUITE_ID,
         b"",
@@ -112,7 +163,7 @@ fn key_schedule(shared_secret: [u8; 32], info: &[u8]) -> Context {
     key_schedule_context[33..].copy_from_slice(&info_hash);
     let (secret, _) = labeled_extract(
         X25519_HKDF_CHACHA8POLY1305_HPKE_SUITE_ID,
-        &shared_secret,
+        &*shared_secret,
         b"secret",
         b"",
     );
