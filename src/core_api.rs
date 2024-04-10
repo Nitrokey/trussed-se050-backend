@@ -67,8 +67,8 @@ struct VolatileRsaKey {
     intermediary_key: [u8; 16],
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-enum WrappedKeyType {
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+pub(crate) enum WrappedKeyType {
     Volatile,
     VolatileRsa,
 }
@@ -2040,21 +2040,15 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(reply::Clear { success })
     }
 
-    pub(crate) fn wrap_key(
+    pub(crate) fn wrap_key_data(
         &mut self,
-        req: &request::WrapKey,
-        core_keystore: &mut impl Keystore,
+        key: KeyId,
         se050_keystore: &mut impl Keystore,
         ns: NamespaceValue,
-    ) -> Result<reply::WrapKey, Error> {
-        if !matches!(req.mechanism, Mechanism::Chacha8Poly1305) {
-            return Err(Error::RequestNotAvailable);
-        }
-        let (parsed_key, _parsed_ty) = parse_key_id(req.key, ns).ok_or_else(|| {
-            debug!("Failed to parse key id");
-            // Let non-se050 keys be wrapped by the core backend
-            Error::RequestNotAvailable
-        })?;
+    ) -> Result<Option<(key::Key, WrappedKeyType)>, Error> {
+        let Some((parsed_key, _parsed_ty)) = parse_key_id(key, ns) else {
+            return Ok(None);
+        };
 
         let ty = match parsed_key {
             ParsedObjectId::VolatileKey(_) => WrappedKeyType::Volatile,
@@ -2064,7 +2058,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 return Err(Error::ObjectHandleInvalid);
             }
         };
-        debug!("trussed: Chacha8Poly1305::WrapKey {:?}", req.key);
+        debug!("trussed: Chacha8Poly1305::WrapKey {:?}", key);
         match parsed_key {
             ParsedObjectId::VolatileKey(id) => {
                 debug!("Id: {:?}", id.0);
@@ -2075,14 +2069,31 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             _ => unreachable!(),
         }
 
-        let serialized_key = se050_keystore.load_key(key::Secrecy::Secret, None, &req.key)?;
+        let serialized_key = se050_keystore.load_key(key::Secrecy::Secret, None, &key)?;
 
-        let message = Message::from_slice(&serialized_key.serialize()).unwrap();
+        Ok(Some((serialized_key, ty)))
+    }
+
+    pub(crate) fn wrap_key(
+        &mut self,
+        req: &request::WrapKey,
+        core_keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<reply::WrapKey, Error> {
+        if !matches!(req.mechanism, Mechanism::Chacha8Poly1305) {
+            return Err(Error::RequestNotAvailable);
+        }
+        let Some((key, ty)) = self.wrap_key_data(req.key, se050_keystore, ns)? else {
+            debug!("Failed to parse key id");
+            // Let non-se050 keys be wrapped by the core backend
+            return Err(Error::RequestNotAvailable);
+        };
 
         let encryption_request = request::Encrypt {
             mechanism: Mechanism::Chacha8Poly1305,
             key: req.wrapping_key,
-            message,
+            message: Bytes::from_slice(&key.serialize()).unwrap(),
             associated_data: req.associated_data.clone(),
             nonce: req.nonce.clone(),
         };
@@ -2119,55 +2130,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(())
     }
 
-    pub(crate) fn unwrap_key(
+    pub(crate) fn store_unwrapped_key_data(
         &mut self,
-        req: &request::UnwrapKey,
-        core_keystore: &mut impl Keystore,
+        ty: WrappedKeyType,
+        serialized_key: &[u8],
         se050_keystore: &mut impl Keystore,
         ns: NamespaceValue,
-    ) -> Result<reply::UnwrapKey, Error> {
-        debug!("Unwrapping_key");
-        // SE050 wrapped keys start with a `0`, see `wrap_key` for details
-        if !matches!(req.mechanism, Mechanism::Chacha8Poly1305)
-            || req.wrapped_key.first() != Some(&0)
-        {
-            return Err(Error::RequestNotAvailable);
-        }
-        if !matches!(req.attributes.persistence, Location::Volatile) {
-            return Err(Error::FunctionNotSupported);
-        }
-
-        let WrappedKeyData {
-            encrypted_data:
-                reply::Encrypt {
-                    ciphertext,
-                    nonce,
-                    tag,
-                },
-            ty,
-        } = postcard::from_bytes(&req.wrapped_key[1..]).map_err(|_| Error::CborError)?;
-
-        let decryption_request = request::Decrypt {
-            mechanism: Mechanism::Chacha8Poly1305,
-            key: req.wrapping_key,
-            message: ciphertext,
-            associated_data: req.associated_data.clone(),
-            nonce,
-            tag,
-        };
-
-        let serialized_key = if let Some(serialized_key) =
-            <trussed::mechanisms::Chacha8Poly1305 as trussed::service::Decrypt>::decrypt(
-                core_keystore,
-                &decryption_request,
-            )?
-            .plaintext
-        {
-            serialized_key
-        } else {
-            return Ok(reply::UnwrapKey { key: None });
-        };
-
+    ) -> Result<KeyId, Error> {
         // TODO: probably change this to returning Option<key> too
         let key::Key {
             flags: _,
@@ -2228,6 +2197,58 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             &key_id,
             &material,
         )?;
+        Ok(key_id)
+    }
+
+    pub(crate) fn unwrap_key(
+        &mut self,
+        req: &request::UnwrapKey,
+        core_keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<reply::UnwrapKey, Error> {
+        debug!("Unwrapping_key");
+        // SE050 wrapped keys start with a `0`, see `wrap_key` for details
+        if !matches!(req.mechanism, Mechanism::Chacha8Poly1305)
+            || req.wrapped_key.first() != Some(&0)
+        {
+            return Err(Error::RequestNotAvailable);
+        }
+        if !matches!(req.attributes.persistence, Location::Volatile) {
+            return Err(Error::FunctionNotSupported);
+        }
+
+        let WrappedKeyData {
+            encrypted_data:
+                reply::Encrypt {
+                    ciphertext,
+                    nonce,
+                    tag,
+                },
+            ty,
+        } = postcard::from_bytes(&req.wrapped_key[1..]).map_err(|_| Error::CborError)?;
+
+        let decryption_request = request::Decrypt {
+            mechanism: Mechanism::Chacha8Poly1305,
+            key: req.wrapping_key,
+            message: ciphertext,
+            associated_data: req.associated_data.clone(),
+            nonce,
+            tag,
+        };
+
+        let decryption_result =
+            <trussed::mechanisms::Chacha8Poly1305 as trussed::service::Decrypt>::decrypt(
+                core_keystore,
+                &decryption_request,
+            )?
+            .plaintext;
+
+        let Some(serialized_key) = decryption_result else {
+            return Ok(reply::UnwrapKey { key: None });
+        };
+
+        let key_id = self.store_unwrapped_key_data(ty, &serialized_key, se050_keystore, ns)?;
 
         Ok(reply::UnwrapKey { key: Some(key_id) })
     }
