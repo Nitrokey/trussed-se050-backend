@@ -29,7 +29,7 @@ use trussed::{
     backend::Backend,
     config::MAX_MESSAGE_LENGTH,
     key::{self, Kind, Secrecy},
-    service::{Keystore, ServiceResources},
+    service::{Keystore, MechanismImpl, ServiceResources},
     types::{CoreContext, KeyId, KeySerialization, Location, Mechanism, Message},
     Bytes, Error,
 };
@@ -2087,7 +2087,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             nonce: req.nonce.clone(),
         };
         let encrypted_data =
-            <trussed::mechanisms::Chacha8Poly1305 as trussed::service::Encrypt>::encrypt(
+            trussed::mechanisms::Chacha8Poly1305.encrypt(
                 core_keystore,
                 &encryption_request,
             )?;
@@ -2157,7 +2157,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         };
 
         let serialized_key = if let Some(serialized_key) =
-            <trussed::mechanisms::Chacha8Poly1305 as trussed::service::Decrypt>::decrypt(
+            trussed::mechanisms::Chacha8Poly1305.decrypt(
                 core_keystore,
                 &decryption_request,
             )?
