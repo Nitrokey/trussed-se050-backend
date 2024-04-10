@@ -6,7 +6,7 @@ type HkdfSha256 = hkdf::Hkdf<sha2::Sha256>;
 type HkdfSha256Extract = hkdf::HkdfExtract<sha2::Sha256>;
 
 const X25519_KEM_SUITE_ID: &[u8] = b"KEM\x00\x20";
-const X25519_HKDF_CHACHA8POLY1305_HPKE_SUITE_ID: &'static [u8] = b"HPKE\x00\x20\x00\x01\xFF\xFE";
+const X25519_HKDF_CHACHA8POLY1305_HPKE_SUITE_ID: &[u8] = b"HPKE\x00\x20\x00\x01\xFF\xFE";
 const MODE_BASE: u8 = 0x00;
 const NK: usize = 32;
 const NN: usize = 12;

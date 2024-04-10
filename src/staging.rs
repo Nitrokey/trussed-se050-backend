@@ -9,7 +9,9 @@ use se05x::se05x::commands::{
 use se05x::se05x::policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet};
 use se05x::se05x::{EcCurve, ObjectId, P1KeyType};
 use se05x::t1::I2CForT1;
-use trussed::key;
+use serde::{Deserialize, Serialize};
+use trussed::config::MAX_SERIALIZED_KEY_LENGTH;
+use trussed::key::{self};
 use trussed::service::Keystore;
 use trussed::types::{KeyId, Location};
 use trussed::{
@@ -20,21 +22,24 @@ use trussed::{
     types::{CoreContext, StorageAttributes},
     Error,
 };
-use trussed_hpke::{HpkeExtension, HpkeOpenReply, HpkeRequest, HpkeSealReply};
+use trussed_hpke::{
+    HpkeExtension, HpkeOpenKeyFromFileReply, HpkeOpenKeyReply, HpkeOpenReply, HpkeRequest,
+    HpkeSealKeyReply, HpkeSealKeyToFileReply, HpkeSealReply,
+};
 use trussed_manage::{ManageExtension, ManageRequest};
 use trussed_wrap_key_to_file::{
     reply as ext_reply, WrapKeyToFileExtension, WrapKeyToFileReply, WrapKeyToFileRequest,
 };
 
 use crate::{
-    core_api::{ItemsToDelete, CORE_DIR},
+    core_api::{ItemsToDelete, WrappedKeyType, CORE_DIR},
     namespacing::{
         parse_key_id, KeyType, NamespaceValue, ParsedObjectId, PersistentObjectId, VolatileObjectId,
     },
     Se050Backend, BACKEND_DIR,
 };
 
-use self::hpke::extract_and_expand;
+use self::hpke::{extract_and_expand, TAG_LEN};
 
 mod hpke;
 
@@ -274,6 +279,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok((enc, ctx))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn hpke_seal(
         &mut self,
         pkr: KeyId,
@@ -286,7 +292,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     ) -> Result<(hpke::PublicKey, [u8; hpke::TAG_LEN]), Error> {
         let (enc, ctx) = self.hpke_setup_base_s(pkr, info, core_keystore, se050_keystore, ns)?;
         let tag = ctx.seal_in_place_detached(aad, ciphertext);
-        return Ok((enc, tag));
+        Ok((enc, tag))
     }
 
     fn hpke_decap(
@@ -370,6 +376,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(context)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn hpke_open(
         &mut self,
         pkr: KeyId,
@@ -384,7 +391,45 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let ctx = self.hpke_setup_base_r(pkr, enc, info, se050_keystore, ns)?;
         ctx.open_in_place_detached(aad, ciphertext, tag)
             .map_err(|_| Error::AeadError)?;
-        return Ok(());
+        Ok(())
+    }
+
+    fn load_wrap_key_data(
+        &mut self,
+        key: KeyId,
+        core_keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<UnsealedKey, Error> {
+        if let Some((key, ty)) = self.wrap_key_data(key, se050_keystore, ns)? {
+            return Ok(UnsealedKey {
+                data: key.serialize().into(),
+                kind: ty.into(),
+            });
+        }
+
+        let key = core_keystore.load_key(key::Secrecy::Secret, None, &key)?;
+        Ok(UnsealedKey {
+            data: key.serialize().into(),
+            kind: KeyKind::Core,
+        })
+    }
+
+    fn store_wrap_key_data(
+        &mut self,
+        data: &UnsealedKey,
+        location: Location,
+        core_keystore: &mut impl Keystore,
+        se050_keystore: &mut impl Keystore,
+        ns: NamespaceValue,
+    ) -> Result<KeyId, Error> {
+        let key = key::Key::try_deserialize(&data.data)?;
+        match data.kind {
+            KeyKind::Core => {
+                core_keystore.store_key(location, key::Secrecy::Secret, key.kind, &key.material)
+            }
+            KeyKind::Se050(ty) => self.store_unwrapped_key_data(ty, &data.data, se050_keystore, ns),
+        }
     }
 }
 
@@ -401,6 +446,41 @@ fn load_hpke_public_key(
     Ok(public_bytes.into())
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy)]
+enum KeyKind {
+    Core,
+    Se050(WrappedKeyType),
+}
+
+impl From<WrappedKeyType> for KeyKind {
+    fn from(value: WrappedKeyType) -> Self {
+        Self::Se050(value)
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+struct UnsealedKey {
+    #[serde(rename = "d")]
+    data: Bytes<MAX_SERIALIZED_KEY_LENGTH>,
+    #[serde(rename = "k")]
+    kind: KeyKind,
+}
+
+const TAG_OVERHEAD: usize = TAG_LEN;
+const ENC_OVERHEAD: usize = 32;
+const HPKE_OVERHEAD: usize = TAG_OVERHEAD + ENC_OVERHEAD;
+
+impl UnsealedKey {
+    // encoding: |map(2) | text(1) | "d" | bytes (len as u16) | MAX_SERIALIZED_KEY_LENGTH | data
+    // | text(1) | "k" | array(1 if core, 2 if se050) | discriminator | (discriminiator) if se050 |
+    fn serialize(&self) -> Bytes<{ MAX_SERIALIZED_KEY_LENGTH + 11 + HPKE_OVERHEAD }> {
+        cbor_smol::cbor_serialize_bytes(&self).unwrap()
+    }
+    fn try_deserialize(data: &[u8]) -> Result<Self, Error> {
+        cbor_smol::cbor_deserialize(data).map_err(|_| Error::CborError)
+    }
+}
+
 impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<HpkeExtension> for Se050Backend<Twi, D> {
     fn extension_request<P: trussed::Platform>(
         &mut self,
@@ -415,6 +495,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<HpkeExtension> for Se050Backe
         let mut backend_path = core_ctx.path.clone();
         backend_path.push(&PathBuf::from(BACKEND_DIR));
         backend_path.push(&PathBuf::from(CORE_DIR));
+        let filestore = &mut resources.filestore(core_ctx.path.clone());
 
         let core_keystore = &mut resources.keystore(core_ctx.path.clone())?;
         let se050_keystore = &mut resources.keystore(backend_path.clone())?;
@@ -447,8 +528,49 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<HpkeExtension> for Se050Backe
                 }
                 .into())
             }
-            HpkeRequest::SealKey(req) => todo!(),
-            HpkeRequest::SealKeyToFile(req) => todo!(),
+            HpkeRequest::SealKey(req) => {
+                let mut pt = self
+                    .load_wrap_key_data(req.key_to_seal, core_keystore, se050_keystore, ns)?
+                    .serialize();
+                let (enc, tag) = self.hpke_seal(
+                    req.public_key,
+                    &req.info,
+                    &req.aad,
+                    &mut pt,
+                    core_keystore,
+                    se050_keystore,
+                    ns,
+                )?;
+                pt.extend_from_slice(&*enc)
+                    .map_err(|_| Error::ImplementationError)?;
+                pt.extend_from_slice(&tag)
+                    .map_err(|_| Error::ImplementationError)?;
+                let data = Bytes::from_slice(&pt).map_err(|_| {
+                    error_now!("Wrapped key is too large. Use WrappKeyToFile instead");
+                    Error::InternalError
+                })?;
+                Ok(HpkeSealKeyReply { data }.into())
+            }
+            HpkeRequest::SealKeyToFile(req) => {
+                let mut pt = self
+                    .load_wrap_key_data(req.key_to_seal, core_keystore, se050_keystore, ns)?
+                    .serialize();
+                let (enc, tag) = self.hpke_seal(
+                    req.public_key,
+                    &req.info,
+                    &req.aad,
+                    &mut pt,
+                    core_keystore,
+                    se050_keystore,
+                    ns,
+                )?;
+                pt.extend_from_slice(&*enc)
+                    .map_err(|_| Error::ImplementationError)?;
+                pt.extend_from_slice(&tag)
+                    .map_err(|_| Error::ImplementationError)?;
+                filestore.write(&req.file, req.location, &pt)?;
+                Ok(HpkeSealKeyToFileReply {}.into())
+            }
             HpkeRequest::Open(req) => {
                 let mut ct = req.ciphertext.clone();
                 let enc = load_hpke_public_key(&req.enc_key, core_keystore)?;
@@ -465,9 +587,91 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<HpkeExtension> for Se050Backe
 
                 Ok(HpkeOpenReply { plaintext: ct }.into())
             }
-            HpkeRequest::OpenKey(req) => todo!(),
-            HpkeRequest::OpenKeyFromFile(req) => todo!(),
-            _ => todo!(),
+            HpkeRequest::OpenKey(req) => {
+                let mut ct = req.sealed_key.clone();
+                let (ct, tag) = ct.split_last_chunk_mut().ok_or(trussed::Error::AeadError)?;
+                let (ct, enc_bytes) = ct.split_last_chunk_mut().ok_or(trussed::Error::AeadError)?;
+
+                let enc = (*enc_bytes).into();
+                self.hpke_open(
+                    req.key,
+                    enc,
+                    &req.info,
+                    &req.aad,
+                    ct,
+                    *tag,
+                    se050_keystore,
+                    ns,
+                )?;
+                let unsealed_key = UnsealedKey::try_deserialize(ct)?;
+                let key = self.store_wrap_key_data(
+                    &unsealed_key,
+                    req.location,
+                    core_keystore,
+                    se050_keystore,
+                    ns,
+                )?;
+
+                Ok(HpkeOpenKeyReply { key }.into())
+            }
+            HpkeRequest::OpenKeyFromFile(req) => {
+                let mut ct: Bytes<{ MAX_SERIALIZED_KEY_LENGTH + 32 + 16 }> =
+                    filestore.read(&req.sealed_key, req.sealed_location)?;
+                let (ct, tag) = ct.split_last_chunk_mut().ok_or(trussed::Error::AeadError)?;
+                let (ct, enc_bytes) = ct.split_last_chunk_mut().ok_or(trussed::Error::AeadError)?;
+
+                let enc = (*enc_bytes).into();
+                self.hpke_open(
+                    req.key,
+                    enc,
+                    &req.info,
+                    &req.aad,
+                    ct,
+                    *tag,
+                    se050_keystore,
+                    ns,
+                )?;
+                let unsealed_key = UnsealedKey::try_deserialize(ct)?;
+                let key = self.store_wrap_key_data(
+                    &unsealed_key,
+                    req.unsealed_location,
+                    core_keystore,
+                    se050_keystore,
+                    ns,
+                )?;
+
+                Ok(HpkeOpenKeyFromFileReply { key }.into())
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsealed_key_size() {
+        let unsealed_key = UnsealedKey {
+            data: Bytes::from_slice(&[0; MAX_SERIALIZED_KEY_LENGTH]).unwrap(),
+            kind: KeyKind::Core,
+        };
+
+        unsealed_key.serialize();
+
+        let unsealed_key = UnsealedKey {
+            data: Bytes::from_slice(&[0; MAX_SERIALIZED_KEY_LENGTH]).unwrap(),
+            kind: KeyKind::Se050(WrappedKeyType::Volatile),
+        };
+
+        unsealed_key.serialize();
+
+        let unsealed_key = UnsealedKey {
+            data: Bytes::from_slice(&[0; MAX_SERIALIZED_KEY_LENGTH]).unwrap(),
+            kind: KeyKind::Se050(WrappedKeyType::VolatileRsa),
+        };
+
+        let data = unsealed_key.serialize();
+        assert_eq!(data.len() + HPKE_OVERHEAD, data.capacity());
     }
 }
