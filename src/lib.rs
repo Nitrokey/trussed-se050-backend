@@ -8,7 +8,11 @@ use littlefs2::path;
 use littlefs2::path::Path;
 use namespacing::{Namespace, NamespaceValue};
 use se05x::{
-    se05x::{commands::ReadEcCurveList, Atr, EcCurve, ObjectId, Se05X},
+    se05x::{
+        commands::ReadEcCurveList,
+        constants::{CurveInitializer, PRIME256V1_INITIALIZER, SECP521R1_INITIALIZER},
+        Atr, ObjectId, Se05X,
+    },
     t1::I2CForT1,
 };
 use trussed::{types::Location, Bytes};
@@ -124,7 +128,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     }
 
     fn configure(&mut self) -> Result<(), trussed::Error> {
-        const REQUIRED_CURVES: [EcCurve; 2] = [EcCurve::NistP256, EcCurve::NistP521];
+        const REQUIRED_CURVES: [CurveInitializer; 2] =
+            [PRIME256V1_INITIALIZER, SECP521R1_INITIALIZER];
         self.enable()?;
         if self.configured {
             return Ok(());
@@ -138,8 +143,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 trussed::Error::FunctionFailed
             })?;
         for i in REQUIRED_CURVES {
-            if !configured_curves.ids.contains(&i.into()) {
-                self.se.create_and_set_curve(i).map_err(|_err| {
+            if !configured_curves.ids.contains(&i.curve.into()) {
+                self.se.create_and_set_curve_params(&i).map_err(|_err| {
                     debug!("Failed to create curve: {_err:?}");
                     trussed::Error::FunctionFailed
                 })?;
