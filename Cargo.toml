@@ -4,7 +4,7 @@ members = ["extensions/se050-manage"]
 [workspace.package]
 authors = ["Nitrokey GmbH <info@nitrokey.com>"]
 edition = "2021"
-repository = "https://github.com/trussed-dev/trussed-staging"
+repository = "https://github.com/Nitrokey/trussed-se050-backend"
 license = "Apache-2.0 OR MIT"
 
 [package]
@@ -47,6 +47,9 @@ p256 = { version = "0.13.2", default-features = false, features = ["ecdsa-core"]
 salty = "0.3.0"
 p256-cortex-m4 = { version = "0.1.0-alpha.6", features = ["prehash", "sec1-signatures"] }
 admin-app = "0.1.0"
+
+[dev-dependencies]
+admin-app = { version = "0.1.0", features = ["migration-tests"] }
 
 [patch.crates-io]
 littlefs2 = { git = "https://github.com/trussed-dev/littlefs2.git", rev = "960e57d9fc0d209308c8e15dc26252bbe1ff6ba8" }
