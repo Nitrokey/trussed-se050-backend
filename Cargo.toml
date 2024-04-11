@@ -65,8 +65,6 @@ admin-app = { git = "https://github.com/Nitrokey/admin-app.git", tag = "v0.1.0-n
 trussed-se050-manage = { path = "extensions/se050-manage" }
 
 [features]
-default = ["log-all"]
-
 log-all = []
 log-none = []
 log-info = []
