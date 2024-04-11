@@ -2065,11 +2065,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         };
         debug!("trussed: Chacha8Poly1305::WrapKey {:?}", req.key);
         match parsed_key {
-            ParsedObjectId::VolatileKey(id) => {
-                debug!("Id: {:?}", id.0);
+            ParsedObjectId::VolatileKey(_id) => {
+                debug!("Id: {:?}", _id.0);
             }
-            ParsedObjectId::VolatileRsaKey(id) => {
-                debug!("Rsa Ids: {:?}", (id.key_id(), id.intermediary_key_id()));
+            ParsedObjectId::VolatileRsaKey(_id) => {
+                debug!("Rsa Ids: {:?}", (_id.key_id(), _id.intermediary_key_id()));
             }
             _ => unreachable!(),
         }
