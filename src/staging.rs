@@ -31,6 +31,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<WrapKeyToFileExtension>
         request: &WrapKeyToFileRequest,
         resources: &mut ServiceResources<P>,
     ) -> Result<WrapKeyToFileReply, Error> {
+        self.configure()?;
         // FIXME: Have a real implementation from trussed
         let mut backend_path = core_ctx.path.clone();
         backend_path.push(&PathBuf::from(BACKEND_DIR));
@@ -92,6 +93,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
         request: &ManageRequest,
         _resources: &mut ServiceResources<P>,
     ) -> Result<<ManageExtension as trussed::serde_extensions::Extension>::Reply, Error> {
+        self.configure()?;
         match request {
             ManageRequest::FactoryResetDevice(trussed_manage::FactoryResetDeviceRequest) => {
                 let mut buf = [b'a'; 128];
