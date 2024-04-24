@@ -10,7 +10,9 @@ use namespacing::{Namespace, NamespaceValue};
 use se05x::{
     se05x::{
         commands::ReadEcCurveList,
-        constants::{CurveInitializer, PRIME256V1_INITIALIZER, SECP521R1_INITIALIZER},
+        constants::{
+            CurveInitializer, PRIME256V1_INITIALIZER, SECP384R1_INITIALIZER, SECP521R1_INITIALIZER,
+        },
         Atr, ObjectId, Se05X,
     },
     t1::I2CForT1,
@@ -38,7 +40,7 @@ const BACKEND_DIR: &Path = path!("se050-bak");
 pub const GLOBAL_ATTEST_ID: ObjectId = ObjectId(hex!("F0000012"));
 
 /// The version to know wether it should be re-configured
-pub const SE050_CONFIGURE_VERSION: u32 = 1;
+pub const SE050_CONFIGURE_VERSION: u32 = 2;
 
 pub enum Se05xLocation {
     Persistent,
@@ -149,7 +151,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     }
 }
 
-const REQUIRED_CURVES: &[CurveInitializer] = &[PRIME256V1_INITIALIZER, SECP521R1_INITIALIZER];
+const REQUIRED_CURVES: &[CurveInitializer] = &[
+    PRIME256V1_INITIALIZER,
+    SECP384R1_INITIALIZER,
+    SECP521R1_INITIALIZER,
+];
 
 #[derive(Default, Debug)]
 pub struct Context {
@@ -188,6 +194,14 @@ mod tests {
     fn backend_version() {
         // History of previous SE050_CONFIGURE_VERSION and the curves they used
         let curves_versions: &[(u32, &[_])] = &[
+            (
+                2,
+                &[
+                    PRIME256V1_INITIALIZER,
+                    SECP384R1_INITIALIZER,
+                    SECP521R1_INITIALIZER,
+                ],
+            ),
             (1, &[PRIME256V1_INITIALIZER, SECP521R1_INITIALIZER]),
             (0, &[]),
         ];

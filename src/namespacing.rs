@@ -344,6 +344,8 @@ enum_number! {
         Rsa2048 = 0x4,
         Rsa3072 = 0x5,
         Rsa4096 = 0x6,
+        P384 = 0x7,
+        P521 = 0x8,
     }
 }
 
@@ -353,6 +355,8 @@ impl KeyType {
             Self::Ed255 => Kind::Ed255,
             Self::X255 => Kind::X255,
             Self::P256 => Kind::P256,
+            Self::P384 => Kind::P384,
+            Self::P521 => Kind::P521,
             Self::Rsa2048 => Kind::Rsa2048,
             Self::Rsa3072 => Kind::Rsa3072,
             Self::Rsa4096 => Kind::Rsa4096,
