@@ -139,6 +139,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             })?;
         for i in REQUIRED_CURVES {
             if !configured_curves.ids.contains(&i.into()) {
+                info!("Configuring {i:?}");
                 self.se.create_and_set_curve(i).map_err(|_err| {
                     debug!("Failed to create curve: {_err:?}");
                     trussed::Error::FunctionFailed
