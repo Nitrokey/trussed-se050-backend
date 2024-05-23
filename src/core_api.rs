@@ -2982,28 +2982,39 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         request: &Request,
         resources: &mut ServiceResources<P>,
     ) -> Result<trussed::Reply, Error> {
-        self.configure()?;
-
         // FIXME: Have a real implementation from trussed
         let mut backend_path = core_ctx.path.clone();
         backend_path.push(&PathBuf::from(BACKEND_DIR));
         backend_path.push(&PathBuf::from(CORE_DIR));
 
-        /// Coerce an FnMut into a FnOnce to ensure the stores are not created twice by mistake
-        fn once<R, P>(
-            generator: impl FnMut(&mut ServiceResources<P>, &mut CoreContext) -> R,
+        /// Coerce an Fn* into a FnOnce to ensure the stores are not created twice by mistake
+        fn once2<R, P>(
+            generator: impl FnOnce(&mut ServiceResources<P>, &mut CoreContext) -> R,
         ) -> impl FnOnce(&mut ServiceResources<P>, &mut CoreContext) -> R {
             generator
         }
-        let core_keystore = once(|resources, core_ctx| resources.keystore(core_ctx.path.clone()));
-        let se050_keystore = once(|resources, _core_ctx| resources.keystore(backend_path.clone()));
+        fn once<R>(generator: impl FnOnce() -> R) -> impl FnOnce() -> R {
+            generator
+        }
+
+        let core_keystore = once2(|resources, core_ctx| resources.keystore(core_ctx.path.clone()));
+        let se050_keystore = once2(|resources, _core_ctx| resources.keystore(backend_path.clone()));
 
         let backend_ctx = backend_ctx.with_namespace(&self.ns, &core_ctx.path);
         let ns = backend_ctx.ns;
 
+        let this = once(move || {
+            self.configure()
+                .map_err(|_err| {
+                    error!("Failed to configure SE050: {_err:?}");
+                    Error::FunctionFailed
+                })
+                .map(|()| self)
+        });
+
         Ok(match request {
-            Request::RandomBytes(request::RandomBytes { count }) => self.random_bytes(*count)?,
-            Request::Agree(req) if supported(req.mechanism) => self
+            Request::RandomBytes(request::RandomBytes { count }) => this()?.random_bytes(*count)?,
+            Request::Agree(req) if supported(req.mechanism) => this()?
                 .agree(
                     req,
                     &mut core_keystore(resources, core_ctx)?,
@@ -3011,7 +3022,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     ns,
                 )?
                 .into(),
-            Request::Decrypt(req) if supported(req.mechanism) => self
+            Request::Decrypt(req) if supported(req.mechanism) => this()?
                 .decrypt(
                     req.key,
                     req.mechanism,
@@ -3020,7 +3031,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     ns,
                 )?
                 .into(),
-            Request::DeriveKey(req) if supported(req.mechanism) => self
+            Request::DeriveKey(req) if supported(req.mechanism) => this()?
                 .derive_key(
                     req,
                     &mut core_keystore(resources, core_ctx)?,
@@ -3028,22 +3039,22 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     ns,
                 )?
                 .into(),
-            Request::Encrypt(req) if supported(req.mechanism) => self
+            Request::Encrypt(req) if supported(req.mechanism) => this()?
                 .encrypt(req, &mut core_keystore(resources, core_ctx)?, ns)?
                 .into(),
-            Request::DeserializeKey(req) if supported(req.mechanism) => self
+            Request::DeserializeKey(req) if supported(req.mechanism) => this()?
                 .deserialize_key(req, &mut core_keystore(resources, core_ctx)?)?
                 .into(),
-            Request::SerializeKey(req) if supported(req.mechanism) => self
+            Request::SerializeKey(req) if supported(req.mechanism) => this()?
                 .serialize_key(req, &mut core_keystore(resources, core_ctx)?)?
                 .into(),
-            Request::Delete(request::Delete { key }) => self
+            Request::Delete(request::Delete { key }) => this()?
                 .delete(key, ns, &mut se050_keystore(resources, core_ctx)?)?
                 .into(),
-            Request::Clear(req) => self
+            Request::Clear(req) => this()?
                 .clear(req, &mut se050_keystore(resources, core_ctx)?, ns)?
                 .into(),
-            Request::DeleteAllKeys(req) => self
+            Request::DeleteAllKeys(req) => this()?
                 .delete_all_keys(
                     req,
                     &mut core_keystore(resources, core_ctx)?,
@@ -3051,19 +3062,19 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     ns,
                 )?
                 .into(),
-            Request::Exists(req) if supported(req.mechanism) => self
+            Request::Exists(req) if supported(req.mechanism) => this()?
                 .exists(req, &mut se050_keystore(resources, core_ctx)?, ns)?
                 .into(),
-            Request::GenerateKey(req) if supported(req.mechanism) => self
+            Request::GenerateKey(req) if supported(req.mechanism) => this()?
                 .generate_key(req, &mut se050_keystore(resources, core_ctx)?, ns)?
                 .into(),
-            Request::Sign(req) if supported(req.mechanism) => self
+            Request::Sign(req) if supported(req.mechanism) => this()?
                 .sign(req, &mut se050_keystore(resources, core_ctx)?, ns)?
                 .into(),
-            Request::UnsafeInjectKey(req) if supported(req.mechanism) => self
+            Request::UnsafeInjectKey(req) if supported(req.mechanism) => this()?
                 .unsafe_inject_key(req, &mut se050_keystore(resources, core_ctx)?, ns)?
                 .into(),
-            Request::UnwrapKey(req) => self
+            Request::UnwrapKey(req) => this()?
                 .unwrap_key(
                     req,
                     &mut core_keystore(resources, core_ctx)?,
@@ -3071,10 +3082,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     ns,
                 )?
                 .into(),
-            Request::Verify(req) if supported(req.mechanism) => self
+            Request::Verify(req) if supported(req.mechanism) => this()?
                 .verify(req, &mut core_keystore(resources, core_ctx)?, ns)?
                 .into(),
-            Request::WrapKey(req) => self
+            Request::WrapKey(req) => this()?
                 .wrap_key(
                     req,
                     &mut core_keystore(resources, core_ctx)?,

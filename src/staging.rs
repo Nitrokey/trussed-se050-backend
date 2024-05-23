@@ -31,6 +31,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<WrapKeyToFileExtension>
         request: &WrapKeyToFileRequest,
         resources: &mut ServiceResources<P>,
     ) -> Result<WrapKeyToFileReply, Error> {
+        self.configure().map_err(|err| {
+            debug!("Failed to enable for wrapkey: {err:?}");
+            err
+        })?;
+
         // FIXME: Have a real implementation from trussed
         let mut backend_path = core_ctx.path.clone();
         backend_path.push(&PathBuf::from(BACKEND_DIR));
