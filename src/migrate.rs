@@ -63,8 +63,8 @@ pub fn migrate_remove_all_dat(fs: &dyn DynFilesystem, apps: &[&Path]) -> Result<
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
+    use admin_app::migrations::test_utils::{test_migration_one, FsValues};
     use littlefs2::path;
-    use trussed_staging::manage::test_utils::{test_migration_one, FsValues};
 
     use crate::trussed_auth_impl::AUTH_DIR;
 
