@@ -137,6 +137,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 debug!("Failed to list curves: {_err:?}");
                 trussed::Error::FunctionFailed
             })?;
+        info!("Configured curves: {configured_curves:02x?}");
         for i in REQUIRED_CURVES {
             if !configured_curves.ids.contains(&i.into()) {
                 info!("Configuring {i:?}");

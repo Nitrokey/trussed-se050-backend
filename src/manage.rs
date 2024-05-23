@@ -3,7 +3,7 @@ use embedded_hal::blocking::delay::DelayUs;
 use se05x::{
     se05x::{
         commands::{GetFreeMemory, GetVersion},
-        Memory,
+        Memory, MoreIndicator,
     },
     t1::I2CForT1,
 };
@@ -93,7 +93,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<Se050ManageExtension> for Se0
                 .into())
             }
             Se050ManageRequest::TestSe050(_) => {
-                let mut buf = [b'a'; 128];
+                let mut buf = [b'a'; 1024];
                 let mut reply = Bytes::new();
                 let atr = self.enable()?;
                 let map_err = |_err| {
@@ -143,6 +143,36 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<Se050ManageExtension> for Se0
                 for i in 1..113 {
                     reply.push(i).ok();
                 }
+
+                let mut more = true;
+                let mut offset = 0;
+                while more {
+                    let objects = self
+                        .se
+                        .run_command(
+                            &se05x::se05x::commands::ReadIdList::builder()
+                                .offset(offset.into())
+                                .filter(se05x::se05x::SecureObjectFilter::All)
+                                .build(),
+                            &mut buf,
+                        )
+                        .map_err(|_err| {
+                            error!("Failed to get id list: {_err:?}");
+                            Error::FunctionFailed
+                        })?;
+                    more = objects.more == MoreIndicator::More;
+                    offset += (objects.ids.len() / 4) as u16;
+
+                    for obj in objects.ids.chunks(4) {
+                        if let Ok(arr) = obj.try_into() {
+                            debug_now!("Object: {:?}", se05x::se05x::ObjectId(arr));
+                        } else {
+                            debug_now!("Bad chunk: {obj:02x?}");
+                        }
+                    }
+                }
+
+                self.configure().ok();
 
                 Ok(TestSe050Reply { reply }.into())
             }
