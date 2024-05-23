@@ -145,7 +145,7 @@ fn handle_rsa_import_format(data: &[u8], size: u16) -> Option<RsaImportElements>
         CtOption::new(d, success.into())
     });
 
-    let Some((d, n)) = d_opt
+    let maybe_d_n: Option<([u8; 512], [u8; 512])> = d_opt
         .and_then(|d| {
             let n: CtOption<_> = n_opt.into();
             n.and_then(|n| {
@@ -154,10 +154,8 @@ fn handle_rsa_import_format(data: &[u8], size: u16) -> Option<RsaImportElements>
                 CtOption::new(value, choice)
             })
         })
-        .into()
-    else {
-        return None;
-    };
+        .into();
+    let (d, n) = maybe_d_n?;
 
     Some(RsaImportElements { e: parsed.e, d, n })
 }
