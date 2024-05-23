@@ -28,11 +28,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<Se050ManageExtension> for Se0
         request: &<Se050ManageExtension as Extension>::Request,
         _resources: &mut ServiceResources<P>,
     ) -> Result<<Se050ManageExtension as Extension>::Reply, Error> {
-        self.configure().map_err(|err| {
-            debug!("Failed to enable for management: {err:?}");
-            err
-        })?;
-
         debug!("Runnig manage request: {request:?}");
         match request {
             Se050ManageRequest::Info(InfoRequest) => {
