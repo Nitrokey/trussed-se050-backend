@@ -47,6 +47,7 @@ p256 = { version = "0.13.2", default-features = false, features = ["ecdsa-core"]
 salty = "0.3.0"
 p256-cortex-m4 = { version = "0.1.0-alpha.6", features = ["prehash", "sec1-signatures"] }
 admin-app = "0.1.0"
+bitflags = "2.5.0"
 
 [dev-dependencies]
 admin-app = { version = "0.1.0", features = ["migration-tests"] }

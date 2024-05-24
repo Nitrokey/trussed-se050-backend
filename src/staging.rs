@@ -19,6 +19,7 @@ use trussed_wrap_key_to_file::{
     reply as ext_reply, WrapKeyToFileExtension, WrapKeyToFileReply, WrapKeyToFileRequest,
 };
 
+use crate::core_api::ItemsToDelete;
 use crate::{core_api::CORE_DIR, Se050Backend, BACKEND_DIR};
 
 impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<WrapKeyToFileExtension>
@@ -154,6 +155,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                     Error::RequestNotAvailable
                 })?;
                 self.delete_all_items(
+                    ItemsToDelete::KEYS | ItemsToDelete::PINS,
                     &[Location::Volatile, Location::External, Location::Internal],
                     ns,
                 )?;

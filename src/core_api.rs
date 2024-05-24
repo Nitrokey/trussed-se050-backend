@@ -1,5 +1,6 @@
 //! Implementations of the core APIs for the SE050 backend
 
+use bitflags::bitflags;
 use cbor_smol::{cbor_deserialize, cbor_serialize};
 use crypto_bigint::{
     subtle::{ConstantTimeEq, ConstantTimeGreater, CtOption},
@@ -7,6 +8,7 @@ use crypto_bigint::{
 };
 use embedded_hal::blocking::delay::DelayUs;
 use hex_literal::hex;
+use iso7816::Status;
 use littlefs2::path::PathBuf;
 use rand::{CryptoRng, RngCore};
 use se05x::{
@@ -80,6 +82,13 @@ enum WrappedKeyType {
 struct WrappedKeyData {
     encrypted_data: reply::Encrypt,
     ty: WrappedKeyType,
+}
+
+bitflags! {
+    pub struct ItemsToDelete: u8 {
+        const KEYS = 0b00000001;
+        const PINS = 0b00000010;
+    }
 }
 
 /// The bool returned points at wether the mechanism is raw RSA
@@ -2308,6 +2317,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
     pub(crate) fn delete_all_items(
         &mut self,
+        kinds: ItemsToDelete,
         locations: &[Location],
         ns: NamespaceValue,
     ) -> Result<usize, Error> {
@@ -2352,7 +2362,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 match parsed_obj_id {
                     ParsedObjectId::PersistentKey(obj)
                         if locations.contains(&Location::Internal)
-                            || locations.contains(&Location::External) =>
+                            || locations.contains(&Location::External)
+                                && kinds.contains(ItemsToDelete::KEYS) =>
                     {
                         count += 1;
                         offset = offset.saturating_sub(1);
@@ -2363,7 +2374,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                                 Error::FunctionFailed
                             })?;
                     }
-                    ParsedObjectId::VolatileKey(obj) if locations.contains(&Location::Volatile) => {
+                    ParsedObjectId::VolatileKey(obj)
+                        if locations.contains(&Location::Volatile)
+                            && kinds.contains(ItemsToDelete::KEYS) =>
+                    {
                         count += 1;
                         offset = offset.saturating_sub(1);
                         self.se
@@ -2374,10 +2388,35 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                             })?;
                     }
                     ParsedObjectId::VolatileRsaKey(obj)
-                        if locations.contains(&Location::Volatile) =>
+                        if locations.contains(&Location::Volatile)
+                            && kinds.contains(ItemsToDelete::KEYS) =>
                     {
                         let deleted_count = self.delete_volatile_rsa_key_on_se050(obj)?;
                         // VolatileRsaKeys can appear twice (intermediary and real key. They should be counted as one)
+                        count += if deleted_count == 0 { 0 } else { 1 };
+                        offset = offset.saturating_sub(deleted_count);
+                    }
+                    ParsedObjectId::Pin(se_id) if kinds.contains(ItemsToDelete::PINS) => {
+                        debug!("Deleting simple pin");
+                        let res = self
+                            .se
+                            .run_command(&DeleteSecureObject { object_id: se_id.0 }, buf2);
+                        match res {
+                            Err(se05x::se05x::Error::Status(Status::KeyReferenceNotFound))
+                            | Ok(_) => {}
+                            Err(_err) => {
+                                error_now!("Failed to delete pin: {_err:?}");
+                                return Err(Error::FunctionFailed);
+                            }
+                        }
+                        count += 1;
+                        offset = offset.saturating_sub(1);
+                    }
+                    ParsedObjectId::PinWithDerived(se_id)
+                        if kinds.contains(ItemsToDelete::PINS) =>
+                    {
+                        use crate::trussed_auth_impl::data::PinData;
+                        let deleted_count = PinData::delete_with_derived(&mut self.se, se_id)?;
                         count += if deleted_count == 0 { 0 } else { 1 };
                         offset = offset.saturating_sub(deleted_count);
                     }
@@ -2408,7 +2447,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         debug!("Deleted core: {core_count}");
         debug!("Deleted fs: {_fs_count}");
 
-        let count = self.delete_all_items(&[req.location], ns)?;
+        let count = self.delete_all_items(ItemsToDelete::KEYS, &[req.location], ns)?;
 
         Ok(reply::DeleteAllKeys {
             count: core_count + count,

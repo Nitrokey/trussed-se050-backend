@@ -22,7 +22,7 @@ use trussed::{
 };
 use trussed_auth::MAX_HW_KEY_LEN;
 
-mod data;
+pub(crate) mod data;
 
 use crate::{
     namespacing::{namespace, NamespaceValue, ObjectKind},
