@@ -85,7 +85,7 @@ struct WrappedKeyData {
 }
 
 bitflags! {
-    pub struct ItemsToDelete: u8 {
+    pub(crate) struct ItemsToDelete: u8 {
         const KEYS = 0b00000001;
         const PINS = 0b00000010;
     }
