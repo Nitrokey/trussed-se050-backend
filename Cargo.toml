@@ -50,6 +50,7 @@ admin-app = "0.1.0"
 
 [dev-dependencies]
 admin-app = { version = "0.1.0", features = ["migration-tests"] }
+serde_test = "1.0.176"
 
 [patch.crates-io]
 littlefs2 = { git = "https://github.com/trussed-dev/littlefs2.git", rev = "960e57d9fc0d209308c8e15dc26252bbe1ff6ba8" }

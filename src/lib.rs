@@ -37,6 +37,63 @@ const BACKEND_DIR: &Path = path!("se050-bak");
 
 pub const GLOBAL_ATTEST_ID: ObjectId = ObjectId(hex!("F0000012"));
 
+#[derive(PartialEq, Eq, Default, Debug)]
+pub struct BackendVersion {
+    pub major: u8,
+    pub minor: u8,
+    pub patch: u8,
+}
+
+impl serde::Serialize for BackendVersion {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_u32(u32::from_be_bytes([0, self.major, self.minor, self.patch]))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for BackendVersion {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error;
+        let value = u32::deserialize(deserializer)?;
+        let [zero, major, minor, patch] = value.to_be_bytes();
+        if zero != 0 {
+            return Err(D::Error::custom("Invalid value for BackendVersion"));
+        }
+
+        Ok(BackendVersion {
+            major,
+            minor,
+            patch,
+        })
+    }
+}
+
+pub const SE050_BACKEND_VERSION: BackendVersion = {
+    const fn parse_u8(s: &str) -> u8 {
+        let bytes = s.as_bytes();
+        let mut result = 0u8;
+        let mut i = 0;
+        while i < bytes.len() {
+            let Some(digit) = (bytes[i] as char).to_digit(10) else {
+                panic!("Invalid number");
+            };
+            result = result * 10 + (digit as u8);
+            i += 1;
+        }
+        result
+    }
+    BackendVersion {
+        major: parse_u8(env!("CARGO_PKG_VERSION_MAJOR")),
+        minor: parse_u8(env!("CARGO_PKG_VERSION_MINOR")),
+        patch: parse_u8(env!("CARGO_PKG_VERSION_PATCH")),
+    }
+};
+
 pub enum Se05xLocation {
     Persistent,
     Transient,
@@ -127,7 +184,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         }
     }
 
-    fn configure(&mut self) -> Result<(), trussed::Error> {
+    pub fn configure(&mut self) -> Result<(), trussed::Error> {
         const REQUIRED_CURVES: [CurveInitializer; 2] =
             [PRIME256V1_INITIALIZER, SECP521R1_INITIALIZER];
         self.enable()?;
@@ -183,4 +240,25 @@ pub struct ContextNs<'a> {
 const ID_RANGE: Range<u32> = 0x000000FF..0x7FFF0000;
 pub(crate) fn object_in_range(obj: ObjectId) -> bool {
     ID_RANGE.contains(&u32::from_be_bytes(obj.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use serde_test::{assert_tokens, Token};
+
+    #[test]
+    fn backend_version() {
+        // Check that serialization round-trip is correct
+        assert_tokens(
+            &SE050_BACKEND_VERSION,
+            &[Token::U32(u32::from_be_bytes([
+                0,
+                env!("CARGO_PKG_VERSION_MAJOR").parse().unwrap(),
+                env!("CARGO_PKG_VERSION_MINOR").parse().unwrap(),
+                env!("CARGO_PKG_VERSION_PATCH").parse().unwrap(),
+            ]))],
+        );
+    }
 }
