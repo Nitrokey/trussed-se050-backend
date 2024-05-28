@@ -126,7 +126,6 @@ pub struct Se050Backend<Twi, D> {
     metadata_location: Location,
     hw_key: HardwareKey,
     ns: Namespace,
-    configured: bool,
     layout: FilesystemLayout,
 }
 
@@ -147,7 +146,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Some(k) => HardwareKey::Raw(k),
             },
             ns,
-            configured: false,
             layout,
         }
     }
@@ -188,9 +186,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         const REQUIRED_CURVES: [CurveInitializer; 2] =
             [PRIME256V1_INITIALIZER, SECP521R1_INITIALIZER];
         self.enable()?;
-        if self.configured {
-            return Ok(());
-        }
         let buf = &mut [0; 1024];
         let configured_curves = self
             .se
@@ -207,8 +202,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 })?;
             }
         }
-        self.configured = true;
-
         Ok(())
     }
 }

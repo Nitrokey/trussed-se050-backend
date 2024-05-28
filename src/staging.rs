@@ -141,7 +141,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Bac
                         debug!("Failed to factory reset: {_err:?}");
                         Error::FunctionFailed
                     })?;
-                self.configured = false;
+                self.configure()?;
 
                 // Let the staging backend delete the rest of the data
                 Err(Error::RequestNotAvailable)
