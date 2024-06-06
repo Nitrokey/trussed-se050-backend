@@ -1,5 +1,6 @@
 //! Implementations of the core APIs for the SE050 backend
 
+use bitflags::bitflags;
 use cbor_smol::{cbor_deserialize, cbor_serialize};
 use crypto_bigint::{
     subtle::{ConstantTimeEq, ConstantTimeGreater, CtOption},
@@ -80,6 +81,13 @@ enum WrappedKeyType {
 struct WrappedKeyData {
     encrypted_data: reply::Encrypt,
     ty: WrappedKeyType,
+}
+
+bitflags! {
+    pub(crate) struct ItemsToDelete: u8 {
+        const KEYS = 0b00000001;
+        const PINS = 0b00000010;
+    }
 }
 
 /// The bool returned points at wether the mechanism is raw RSA
@@ -224,7 +232,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         se050_keystore: &mut impl Keystore,
     ) -> Result<reply::Delete, Error> {
         let (parsed_key, _parsed_ty) = parse_key_id(*key, ns).ok_or_else(|| {
-            debug!("Failed to parse key id");
+            debug!("Failed to parse key id to delete: {key:?}");
             Error::RequestNotAvailable
         })?;
         debug!("Deleting {key:?}, {parsed_key:?}, {_parsed_ty:?}");
@@ -2011,7 +2019,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     ) -> Result<reply::Clear, Error> {
         debug!("Clearing: {:?}", req.key);
         let (parsed_key, _parsed_ty) = parse_key_id(req.key, ns).ok_or_else(|| {
-            debug!("Failed to parse key id");
+            debug!("Failed to parse key id to clear: {:?}", req.key);
             Error::RequestNotAvailable
         })?;
 
@@ -2050,7 +2058,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             return Err(Error::RequestNotAvailable);
         }
         let (parsed_key, _parsed_ty) = parse_key_id(req.key, ns).ok_or_else(|| {
-            debug!("Failed to parse key id");
+            debug!("Failed to parse key id to wrap: {:?}", req.key);
             // Let non-se050 keys be wrapped by the core backend
             Error::RequestNotAvailable
         })?;
@@ -2238,7 +2246,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         ns: NamespaceValue,
     ) -> Result<reply::Exists, Error> {
         let (parsed_key, parsed_ty) = parse_key_id(req.key, ns).ok_or_else(|| {
-            debug!("Failed to parse key id");
+            debug!("Failed to parse key id to check if exists: {:?}", req.key);
             // Let non-se050 keys be checked by the core backend
             Error::RequestNotAvailable
         })?;
@@ -2306,17 +2314,39 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(reply::Exists { exists })
     }
 
+    fn delete_object(&mut self, object_id: ObjectId, buf: &mut [u8]) -> Result<(), Error> {
+        self.se
+            .run_command(&DeleteSecureObject { object_id }, buf)
+            .map_err(|_err| {
+                error!("Failed to delete object: {object_id:02x?} {_err:?}");
+                Error::FunctionFailed
+            })?;
+        Ok(())
+    }
+
     pub(crate) fn delete_all_items(
         &mut self,
-        locations: &[Location],
+        kinds: ItemsToDelete,
+        // Locations for deleted keys
+        key_locations: &[Location],
         ns: NamespaceValue,
     ) -> Result<usize, Error> {
         let buf = &mut [0; 1024];
         let buf2 = &mut [0; 128];
         let mut count = 0u16;
         let mut offset = 0;
+        let mut cont = true;
 
-        loop {
+        let should_delete_internal = key_locations.contains(&Location::Internal);
+        let should_delete_external = key_locations.contains(&Location::External);
+        let should_delete_volatile = key_locations.contains(&Location::Volatile);
+        // Persistent keys do not have a "location"
+        let should_delete_persistent = should_delete_internal || should_delete_external;
+
+        let should_delete_keys = kinds.contains(ItemsToDelete::KEYS);
+        let should_delete_pins = kinds.contains(ItemsToDelete::PINS);
+
+        while cont {
             let to_delete = self
                 .se
                 .run_command(
@@ -2330,16 +2360,17 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     error!("Failed to read id_list: {_err:?}");
                     Error::FunctionFailed
                 })?;
+            cont = to_delete.more.is_more();
 
             assert_eq!(to_delete.ids.len() % 4, 0);
             offset += (to_delete.ids.len() / 4) as u16;
             for obj_slice in to_delete.ids.chunks_exact(4) {
                 let obj = ObjectId(obj_slice.try_into().unwrap());
-                debug!("Dealing with obj: {obj:02x?}");
+                debug_now!("Dealing with obj: {obj_slice:02x?}");
                 if !object_in_range(obj) {
                     continue;
                 }
-                debug!("In range");
+                debug!("In range for a non-native object");
                 let Some((ns_to_check, parsed_obj_id)) = ParsedObjectId::parse(obj) else {
                     debug!("Failed to parse object id");
                     continue;
@@ -2347,52 +2378,64 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 if ns_to_check != ns {
                     continue;
                 }
-                debug!("In ns");
+                debug!("In namespace");
                 debug!("Got parsed: {parsed_obj_id:02x?}");
                 match parsed_obj_id {
-                    ParsedObjectId::PersistentKey(obj)
-                        if locations.contains(&Location::Internal)
-                            || locations.contains(&Location::External) =>
-                    {
+                    ParsedObjectId::PersistentKey(obj) => {
+                        if !should_delete_persistent || !should_delete_keys {
+                            continue;
+                        }
+
+                        self.delete_object(obj.0, buf2)?;
                         count += 1;
                         offset = offset.saturating_sub(1);
-                        self.se
-                            .run_command(&DeleteSecureObject { object_id: obj.0 }, buf2)
-                            .map_err(|_err| {
-                                error!("Failed to delete object: {obj:02x?} {_err:?}");
-                                Error::FunctionFailed
-                            })?;
                     }
-                    ParsedObjectId::VolatileKey(obj) if locations.contains(&Location::Volatile) => {
+                    ParsedObjectId::VolatileKey(obj) => {
+                        if !should_delete_volatile || !should_delete_keys {
+                            continue;
+                        }
+
+                        self.delete_object(obj.0, buf2)?;
                         count += 1;
                         offset = offset.saturating_sub(1);
-                        self.se
-                            .run_command(&DeleteSecureObject { object_id: obj.0 }, buf2)
-                            .map_err(|_err| {
-                                error!("Failed to delete object: {obj:02x?} {_err:?}");
-                                Error::FunctionFailed
-                            })?;
                     }
-                    ParsedObjectId::VolatileRsaKey(obj)
-                        if locations.contains(&Location::Volatile) =>
-                    {
+                    ParsedObjectId::VolatileRsaKey(obj) => {
+                        if !should_delete_volatile || !should_delete_keys {
+                            continue;
+                        }
+
                         let deleted_count = self.delete_volatile_rsa_key_on_se050(obj)?;
                         // VolatileRsaKeys can appear twice (intermediary and real key. They should be counted as one)
                         count += if deleted_count == 0 { 0 } else { 1 };
                         offset = offset.saturating_sub(deleted_count);
                     }
-                    ParsedObjectId::Pin(_)
-                    | ParsedObjectId::PinWithDerived(_)
-                    | ParsedObjectId::SaltValue(_) => {}
-                    ParsedObjectId::VolatileKey(_) | ParsedObjectId::VolatileRsaKey(_) => {}
-                    ParsedObjectId::PersistentKey(_) => {}
+                    ParsedObjectId::Pin(se_id) => {
+                        if !should_delete_pins {
+                            continue;
+                        }
+
+                        debug!("Deleting simple pin");
+                        self.delete_object(se_id.0, buf2)?;
+                        count += 1;
+                        offset = offset.saturating_sub(1);
+                    }
+                    ParsedObjectId::PinWithDerived(se_id) => {
+                        if !should_delete_pins {
+                            continue;
+                        }
+
+                        use crate::trussed_auth_impl::data::PinData;
+                        let deleted_count = PinData::delete_with_derived(&mut self.se, se_id)?;
+                        count += if deleted_count == 0 { 0 } else { 1 };
+                        offset = offset.saturating_sub(deleted_count);
+                    }
+                    // Salt value is not part of any namespace
+                    // It is only deteled through the full device factory reset
+                    ParsedObjectId::SaltValue(_) => {}
                 }
             }
-
-            if !to_delete.more.is_more() {
-                break;
-            }
         }
+        debug_now!("Deleted {count} items");
         Ok(count.into())
     }
 
@@ -2408,7 +2451,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         debug!("Deleted core: {core_count}");
         debug!("Deleted fs: {_fs_count}");
 
-        let count = self.delete_all_items(&[req.location], ns)?;
+        let count = self.delete_all_items(ItemsToDelete::KEYS, &[req.location], ns)?;
 
         Ok(reply::DeleteAllKeys {
             count: core_count + count,

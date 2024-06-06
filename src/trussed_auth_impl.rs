@@ -22,7 +22,7 @@ use trussed::{
 };
 use trussed_auth::MAX_HW_KEY_LEN;
 
-mod data;
+pub(crate) mod data;
 
 use crate::{
     namespacing::{namespace, NamespaceValue, ObjectKind},
@@ -436,9 +436,16 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 Ok(reply::DeletePin {}.into())
             }
             AuthRequest::DeleteAllPins(request::DeleteAllPins) => {
+                use crate::core_api::ItemsToDelete;
                 let fs = &mut fs(resources, core_ctx);
+                // Satisfy the borrow checker
+                // The `once` trick makes it loose the information that drop is a noop :/
+                drop(global_fs);
 
                 delete_all_pins(fs, self.metadata_location, &mut self.se)?;
+
+                // Ensure that any remaining PIN for the application is also deleted
+                self.delete_all_items(ItemsToDelete::PINS, &[], ns)?;
                 Ok(reply::DeleteAllPins.into())
             }
             AuthRequest::PinRetries(request) => {

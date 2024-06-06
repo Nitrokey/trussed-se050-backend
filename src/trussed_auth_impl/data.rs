@@ -439,7 +439,8 @@ impl PinData {
     pub fn delete_with_derived<Twi: I2CForT1, D: DelayUs<u32>>(
         se050: &mut Se05X<Twi, D>,
         se_id: PinObjectIdWithDerived,
-    ) -> Result<(), Error> {
+    ) -> Result<u16, Error> {
+        let mut count = 0;
         let buf = &mut [0; 1024];
         debug!("checking existence");
         let exists = se050
@@ -467,6 +468,24 @@ impl PinData {
                     debug!("Failed deletion: {_err:?}");
                     _err
                 })?;
+            count += 1;
+        }
+
+        let exists = se050
+            .run_command(
+                &CheckObjectExists {
+                    object_id: se_id.pin_id(),
+                },
+                buf,
+            )
+            .map_err(|_err| {
+                error!("Failed existence check: {_err:?}");
+                Error::ReadFailed
+            })?
+            .result
+            .is_success();
+        if !exists {
+            return Ok(count);
         }
 
         debug!("Writing userid ");
@@ -525,7 +544,8 @@ impl PinData {
                 error!("Failed to delete user id: {err:?}");
                 err
             })?;
-        Ok(())
+        count += 1;
+        Ok(count)
     }
 
     pub fn delete<Twi: I2CForT1, D: DelayUs<u32>>(
@@ -533,23 +553,24 @@ impl PinData {
         fs: &mut impl Filestore,
         location: Location,
         se050: &mut Se05X<Twi, D>,
-    ) -> Result<(), Error> {
+    ) -> Result<u16, Error> {
         debug!("Deleting {self:02x?}");
-        match self.se_id {
+        let deleted_count = match self.se_id {
             PinSeId::WithDerived(se_id) => Self::delete_with_derived(se050, se_id)?,
             PinSeId::Raw(se_id) => {
                 let buf = &mut [0; 1024];
                 debug!("Deleting simple");
                 se050.run_command(&DeleteSecureObject { object_id: se_id.0 }, buf)?;
+                1
             }
-        }
+        };
 
         debug!("Removing file {}", self.id.path());
         fs.remove_file(&self.id.path(), location).map_err(|_err| {
             error!("Removing file failed: {_err:?}");
             Error::WriteFailed
         })?;
-        Ok(())
+        Ok(deleted_count)
     }
 
     /// Returns (tried, max)
