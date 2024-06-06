@@ -37,62 +37,8 @@ const BACKEND_DIR: &Path = path!("se050-bak");
 
 pub const GLOBAL_ATTEST_ID: ObjectId = ObjectId(hex!("F0000012"));
 
-#[derive(PartialEq, Eq, Default, Debug)]
-pub struct BackendVersion {
-    pub major: u8,
-    pub minor: u8,
-    pub patch: u8,
-}
-
-impl serde::Serialize for BackendVersion {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_u32(u32::from_be_bytes([0, self.major, self.minor, self.patch]))
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for BackendVersion {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        use serde::de::Error;
-        let value = u32::deserialize(deserializer)?;
-        let [zero, major, minor, patch] = value.to_be_bytes();
-        if zero != 0 {
-            return Err(D::Error::custom("Invalid value for BackendVersion"));
-        }
-
-        Ok(BackendVersion {
-            major,
-            minor,
-            patch,
-        })
-    }
-}
-
-pub const SE050_BACKEND_VERSION: BackendVersion = {
-    const fn parse_u8(s: &str) -> u8 {
-        let bytes = s.as_bytes();
-        let mut result = 0u8;
-        let mut i = 0;
-        while i < bytes.len() {
-            let Some(digit) = (bytes[i] as char).to_digit(10) else {
-                panic!("Invalid number");
-            };
-            result = result * 10 + (digit as u8);
-            i += 1;
-        }
-        result
-    }
-    BackendVersion {
-        major: parse_u8(env!("CARGO_PKG_VERSION_MAJOR")),
-        minor: parse_u8(env!("CARGO_PKG_VERSION_MINOR")),
-        patch: parse_u8(env!("CARGO_PKG_VERSION_PATCH")),
-    }
-};
+/// The version to know wether it should be re-configured
+pub const SE050_CONFIGURE_VERSION: u32 = 1;
 
 pub enum Se05xLocation {
     Persistent,
@@ -181,10 +127,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             }
         }
     }
-
     pub fn configure(&mut self) -> Result<(), trussed::Error> {
-        const REQUIRED_CURVES: [CurveInitializer; 2] =
-            [PRIME256V1_INITIALIZER, SECP521R1_INITIALIZER];
         self.enable()?;
         let buf = &mut [0; 1024];
         let configured_curves = self
@@ -196,7 +139,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             })?;
         for i in REQUIRED_CURVES {
             if !configured_curves.ids.contains(&i.curve.into()) {
-                self.se.create_and_set_curve_params(&i).map_err(|_err| {
+                self.se.create_and_set_curve_params(i).map_err(|_err| {
                     debug!("Failed to create curve: {_err:?}");
                     trussed::Error::FunctionFailed
                 })?;
@@ -205,6 +148,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(())
     }
 }
+
+const REQUIRED_CURVES: &[CurveInitializer] = &[PRIME256V1_INITIALIZER, SECP521R1_INITIALIZER];
 
 #[derive(Default, Debug)]
 pub struct Context {
@@ -239,19 +184,18 @@ pub(crate) fn object_in_range(obj: ObjectId) -> bool {
 mod tests {
     use super::*;
 
-    use serde_test::{assert_tokens, Token};
-
     #[test]
     fn backend_version() {
-        // Check that serialization round-trip is correct
-        assert_tokens(
-            &SE050_BACKEND_VERSION,
-            &[Token::U32(u32::from_be_bytes([
-                0,
-                env!("CARGO_PKG_VERSION_MAJOR").parse().unwrap(),
-                env!("CARGO_PKG_VERSION_MINOR").parse().unwrap(),
-                env!("CARGO_PKG_VERSION_PATCH").parse().unwrap(),
-            ]))],
+        // History of previous SE050_CONFIGURE_VERSION and the curves they used
+        let curves_versions: &[(u32, &[_])] = &[
+            (1, &[PRIME256V1_INITIALIZER, SECP521R1_INITIALIZER]),
+            (0, &[]),
+        ];
+
+        assert_eq!(
+            curves_versions[0],
+            (SE050_CONFIGURE_VERSION, REQUIRED_CURVES),
+            "CONFIGURE VERSION needs to be bumped when the REQUIRED_CURVES are changed"
         );
     }
 }
