@@ -37,6 +37,9 @@ const BACKEND_DIR: &Path = path!("se050-bak");
 
 pub const GLOBAL_ATTEST_ID: ObjectId = ObjectId(hex!("F0000012"));
 
+/// The version to know wether it should be re-configured
+pub const SE050_CONFIGURE_VERSION: u32 = 1;
+
 pub enum Se05xLocation {
     Persistent,
     Transient,
@@ -69,7 +72,6 @@ pub struct Se050Backend<Twi, D> {
     metadata_location: Location,
     hw_key: HardwareKey,
     ns: Namespace,
-    configured: bool,
     layout: FilesystemLayout,
 }
 
@@ -90,7 +92,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Some(k) => HardwareKey::Raw(k),
             },
             ns,
-            configured: false,
             layout,
         }
     }
@@ -126,14 +127,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             }
         }
     }
-
-    fn configure(&mut self) -> Result<(), trussed::Error> {
-        const REQUIRED_CURVES: [CurveInitializer; 2] =
-            [PRIME256V1_INITIALIZER, SECP521R1_INITIALIZER];
+    pub fn configure(&mut self) -> Result<(), trussed::Error> {
         self.enable()?;
-        if self.configured {
-            return Ok(());
-        }
         let buf = &mut [0; 1024];
         let configured_curves = self
             .se
@@ -144,17 +139,17 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             })?;
         for i in REQUIRED_CURVES {
             if !configured_curves.ids.contains(&i.curve.into()) {
-                self.se.create_and_set_curve_params(&i).map_err(|_err| {
+                self.se.create_and_set_curve_params(i).map_err(|_err| {
                     debug!("Failed to create curve: {_err:?}");
                     trussed::Error::FunctionFailed
                 })?;
             }
         }
-        self.configured = true;
-
         Ok(())
     }
 }
+
+const REQUIRED_CURVES: &[CurveInitializer] = &[PRIME256V1_INITIALIZER, SECP521R1_INITIALIZER];
 
 #[derive(Default, Debug)]
 pub struct Context {
@@ -183,4 +178,24 @@ pub struct ContextNs<'a> {
 const ID_RANGE: Range<u32> = 0x000000FF..0x7FFF0000;
 pub(crate) fn object_in_range(obj: ObjectId) -> bool {
     ID_RANGE.contains(&u32::from_be_bytes(obj.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backend_version() {
+        // History of previous SE050_CONFIGURE_VERSION and the curves they used
+        let curves_versions: &[(u32, &[_])] = &[
+            (1, &[PRIME256V1_INITIALIZER, SECP521R1_INITIALIZER]),
+            (0, &[]),
+        ];
+
+        assert_eq!(
+            curves_versions[0],
+            (SE050_CONFIGURE_VERSION, REQUIRED_CURVES),
+            "CONFIGURE VERSION needs to be bumped when the REQUIRED_CURVES are changed"
+        );
+    }
 }

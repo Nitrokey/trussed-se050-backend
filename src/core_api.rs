@@ -3025,8 +3025,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         request: &Request,
         resources: &mut ServiceResources<P>,
     ) -> Result<trussed::Reply, Error> {
-        self.configure()?;
-
         // FIXME: Have a real implementation from trussed
         let mut backend_path = core_ctx.path.clone();
         backend_path.push(&PathBuf::from(BACKEND_DIR));
