@@ -40,7 +40,7 @@ rand = { version = "0.8.5", default-features = false }
 littlefs2 = "0.4.0"
 cbor-smol = "0.4.0"
 serde_bytes = { version = "0.11.12", default-features = false }
-trussed-rsa-alloc = "0.1.0"
+trussed-rsa-alloc = "0.2.1"
 postcard = "0.7.3"
 crypto-bigint = { version = "0.5.3", default-features = false }
 p256 = { version = "0.13.2", default-features = false, features = ["ecdsa-core"] }
@@ -60,7 +60,7 @@ ctaphid-dispatch = { git = "https://github.com/trussed-dev/ctaphid-dispatch.git"
 trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "667d60c019d485524a276f2a4dd07aaa66e71021" }
 trussed-auth = { git = "https://github.com/trussed-dev/trussed-auth.git", tag = "v0.3.0"}
 trussed-manage = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "manage-v0.1.0" }
-trussed-rsa-alloc = { git = "https://github.com/Nitrokey/trussed-rsa-backend.git", rev = "2088e2f8a8d706276c1559717b4c6b6d4f270253" }
+trussed-rsa-alloc = { git = "https://github.com/trussed-dev/trussed-rsa-backend.git", tag = "v0.2.1" }
 trussed-wrap-key-to-file = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "wrap-key-to-file-v0.1.0" }
 admin-app = { git = "https://github.com/Nitrokey/admin-app.git", tag = "v0.1.0-nitrokey.12" }
 
