@@ -8,7 +8,10 @@ use crypto_bigint::{
 };
 use embedded_hal::blocking::delay::DelayUs;
 use hex_literal::hex;
-use littlefs2::path::PathBuf;
+use littlefs2::{
+    path,
+    path::{Path, PathBuf},
+};
 use rand::{CryptoRng, RngCore};
 use se05x::{
     se05x::{
@@ -47,7 +50,7 @@ use crate::{
 mod ecdsa_der;
 
 pub(crate) const BUFFER_LEN: usize = 2048;
-pub(crate) const CORE_DIR: &str = "se050-core";
+pub(crate) const CORE_DIR: &Path = path!("se050-core");
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct VolatileKeyMaterial {

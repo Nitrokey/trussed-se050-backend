@@ -107,11 +107,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         global_fs: &mut impl Filestore,
         rng: &mut R,
     ) -> Result<Salt, Error> {
-        let path = PathBuf::from("salt");
+        let path = path!("salt");
         global_fs
             .read(&path, self.metadata_location)
             .or_else(|_| {
-                if global_fs.exists(&path, self.metadata_location) {
+                if global_fs.exists(path, self.metadata_location) {
                     return Err(Error::ReadFailed);
                 }
 
@@ -119,7 +119,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 salt.resize_to_capacity();
                 rng.fill_bytes(&mut salt);
                 global_fs
-                    .write(&path, self.metadata_location, &salt)
+                    .write(path, self.metadata_location, &salt)
                     .or(Err(Error::WriteFailed))
                     .and(Ok(salt))
             })
