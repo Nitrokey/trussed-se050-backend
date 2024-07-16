@@ -11,7 +11,9 @@ use se05x::{
     se05x::{
         commands::ReadEcCurveList,
         constants::{
-            CurveInitializer, PRIME256V1_INITIALIZER, SECP384R1_INITIALIZER, SECP521R1_INITIALIZER,
+            CurveInitializer, BRAINPOOL_P256R1_INITIALIZER, BRAINPOOL_P384R1_INITIALIZER,
+            BRAINPOOL_P512R1_INITIALIZER, PRIME256V1_INITIALIZER, SECP384R1_INITIALIZER,
+            SECP521R1_INITIALIZER,
         },
         Atr, ObjectId, Se05X,
     },
@@ -155,6 +157,9 @@ const REQUIRED_CURVES: &[CurveInitializer] = &[
     PRIME256V1_INITIALIZER,
     SECP384R1_INITIALIZER,
     SECP521R1_INITIALIZER,
+    BRAINPOOL_P256R1_INITIALIZER,
+    BRAINPOOL_P384R1_INITIALIZER,
+    BRAINPOOL_P512R1_INITIALIZER,
 ];
 
 #[derive(Default, Debug)]
@@ -200,6 +205,9 @@ mod tests {
                     PRIME256V1_INITIALIZER,
                     SECP384R1_INITIALIZER,
                     SECP521R1_INITIALIZER,
+                    BRAINPOOL_P256R1_INITIALIZER,
+                    BRAINPOOL_P384R1_INITIALIZER,
+                    BRAINPOOL_P512R1_INITIALIZER,
                 ],
             ),
             (1, &[PRIME256V1_INITIALIZER, SECP521R1_INITIALIZER]),

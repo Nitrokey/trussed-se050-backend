@@ -58,7 +58,7 @@ serde_test = "1.0.176"
 littlefs2 = { git = "https://github.com/trussed-dev/littlefs2.git", rev = "960e57d9fc0d209308c8e15dc26252bbe1ff6ba8" }
 apdu-dispatch = { git = "https://github.com/trussed-dev/apdu-dispatch.git", rev = "915fc237103fcecc29d0f0b73391f19abf6576de" }
 ctaphid-dispatch = { git = "https://github.com/trussed-dev/ctaphid-dispatch.git", rev = "57cb3317878a8593847595319aa03ef17c29ec5b" }
-trussed = { git = "https://github.com/nitrokey/trussed.git", rev = "0ccdd468859ea14b43e2e95790b9712c398ae5e1" }
+trussed = { git = "https://github.com/nitrokey/trussed.git", rev = "540ad725ef44f0d6d3d2da7dd6ec0bacffaeb5bf" }
 trussed-auth = { git = "https://github.com/trussed-dev/trussed-auth.git", tag = "v0.3.0"}
 trussed-manage = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "manage-v0.1.0" }
 trussed-rsa-alloc = { git = "https://github.com/trussed-dev/trussed-rsa-backend.git", tag = "v0.2.1" }
