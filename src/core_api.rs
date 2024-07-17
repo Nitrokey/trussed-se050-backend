@@ -199,9 +199,11 @@ fn prepare_rsa_pkcs1v15(message: &[u8], keysize: usize) -> Result<Bytes<512>, Er
 
 const SERIALIZED_P256_LEN: usize = 64;
 const SERIALIZED_P384_LEN: usize = 96;
+#[cfg(feature = "large-ecc")]
 const SERIALIZED_P521_LEN: usize = 128;
 const SERIALIZED_BRAINPOOL_P256R1_LEN: usize = 64;
 const SERIALIZED_BRAINPOOL_P384R1_LEN: usize = 96;
+#[cfg(feature = "large-ecc")]
 const SERIALIZED_BRAINPOOL_P512R1_LEN: usize = 128;
 
 const MAX_SERIALIZED_LEN: usize = 128;
@@ -579,6 +581,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
                 Ok(reply::DeriveKey { key: result })
             }
+            #[cfg(feature = "large-ecc")]
             KeyType::P521 => {
                 let material = self
                     .se
@@ -633,6 +636,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
                 Ok(reply::DeriveKey { key: result })
             }
+            #[cfg(feature = "large-ecc")]
             KeyType::BrainpoolP512R1 => {
                 let material = self
                     .se
@@ -728,9 +732,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             KeyType::X255 => Kind::X255,
             KeyType::P256 => Kind::P256,
             KeyType::P384 => Kind::P384,
+            #[cfg(feature = "large-ecc")]
             KeyType::P521 => Kind::P521,
             KeyType::BrainpoolP256R1 => Kind::BrainpoolP256R1,
             KeyType::BrainpoolP384R1 => Kind::BrainpoolP384R1,
+            #[cfg(feature = "large-ecc")]
             KeyType::BrainpoolP512R1 => Kind::BrainpoolP512R1,
             KeyType::Rsa2048 | KeyType::Rsa3072 | KeyType::Rsa4096 => {
                 unreachable!("Volatile rsa keys are derived in a separate function")
@@ -954,9 +960,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Mechanism::X255 => (Kind::X255, KeyType::X255),
             Mechanism::P256 => (Kind::P256, KeyType::P256),
             Mechanism::P384 => (Kind::P384, KeyType::P384),
+            #[cfg(feature = "large-ecc")]
             Mechanism::P521 => (Kind::P521, KeyType::P521),
             Mechanism::BrainpoolP256R1 => (Kind::BrainpoolP256R1, KeyType::BrainpoolP256R1),
             Mechanism::BrainpoolP384R1 => (Kind::BrainpoolP384R1, KeyType::BrainpoolP384R1),
+            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1 => (Kind::BrainpoolP512R1, KeyType::BrainpoolP512R1),
             Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => {
                 return self.generate_volatile_rsa_key(
@@ -1023,6 +1031,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     error!("Failed to generate volatile key: {_err:?}");
                     Error::FunctionFailed
                 })?,
+            #[cfg(feature = "large-ecc")]
             Mechanism::P521 => self
                 .se
                 .run_command(&generate_p521(object_id.0, true), buf)
@@ -1044,6 +1053,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     error!("Failed to generate volatile key: {_err:?}");
                     Error::FunctionFailed
                 })?,
+            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1 => self
                 .se
                 .run_command(&generate_brainpool_p512r1(object_id.0, true), buf)
@@ -1120,6 +1130,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     Error::FunctionFailed
                 })?,
             Mechanism::P384Prehashed => return Err(Error::MechanismParamInvalid),
+            #[cfg(feature = "large-ecc")]
             Mechanism::P521 => self
                 .se
                 .run_command(&generate_p521(object_id.0, false), buf)
@@ -1127,6 +1138,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     error!("Failed to generate key: {_err:?}");
                     Error::FunctionFailed
                 })?,
+            #[cfg(feature = "large-ecc")]
             Mechanism::P521Prehashed => return Err(Error::MechanismParamInvalid),
             Mechanism::BrainpoolP256R1 => self
                 .se
@@ -1144,6 +1156,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     Error::FunctionFailed
                 })?,
             Mechanism::BrainpoolP384R1Prehashed => return Err(Error::MechanismParamInvalid),
+            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1 => self
                 .se
                 .run_command(&generate_brainpool_p512r1(object_id.0, false), buf)
@@ -1151,6 +1164,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     error!("Failed to generate key: {_err:?}");
                     Error::FunctionFailed
                 })?,
+            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1Prehashed => return Err(Error::MechanismParamInvalid),
             Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => self
                 .se
@@ -1185,9 +1199,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             // TODO First write curve somehow
             Mechanism::P256 => KeyType::P256,
             Mechanism::P384 => KeyType::P384,
+            #[cfg(feature = "large-ecc")]
             Mechanism::P521 => KeyType::P521,
             Mechanism::BrainpoolP256R1 => KeyType::BrainpoolP256R1,
             Mechanism::BrainpoolP384R1 => KeyType::BrainpoolP384R1,
+            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1 => KeyType::BrainpoolP512R1,
             Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => KeyType::Rsa2048,
             Mechanism::Rsa3072Raw | Mechanism::Rsa3072Pkcs1v15 => KeyType::Rsa3072,
@@ -1214,9 +1230,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let kind = match (req.mechanism, priv_parsed_ty) {
             (Mechanism::P256, KeyType::P256) => Kind::P256,
             (Mechanism::P384, KeyType::P384) => Kind::P384,
+            #[cfg(feature = "large-ecc")]
             (Mechanism::P521, KeyType::P521) => Kind::P521,
             (Mechanism::BrainpoolP256R1, KeyType::BrainpoolP256R1) => Kind::BrainpoolP256R1,
             (Mechanism::BrainpoolP384R1, KeyType::BrainpoolP384R1) => Kind::BrainpoolP384R1,
+            #[cfg(feature = "large-ecc")]
             (Mechanism::BrainpoolP512R1, KeyType::BrainpoolP512R1) => Kind::BrainpoolP512R1,
             (Mechanism::X255, KeyType::X255) => Kind::X255,
             _ => return Err(Error::WrongKeyKind),
@@ -1662,6 +1680,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             (Mechanism::P384Prehashed, KeyType::P384) => {
                 (Kind::P384, EcDsaSignatureAlgo::Sha384, 48)
             }
+            #[cfg(feature = "large-ecc")]
             (Mechanism::P521Prehashed, KeyType::P521) => {
                 (Kind::P521, EcDsaSignatureAlgo::Sha512, 66)
             }
@@ -1671,6 +1690,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             (Mechanism::BrainpoolP384R1Prehashed, KeyType::BrainpoolP384R1) => {
                 (Kind::BrainpoolP384R1, EcDsaSignatureAlgo::Sha384, 48)
             }
+            #[cfg(feature = "large-ecc")]
             (Mechanism::BrainpoolP512R1Prehashed, KeyType::BrainpoolP512R1) => {
                 (Kind::BrainpoolP512R1, EcDsaSignatureAlgo::Sha512, 64)
             }
@@ -1806,6 +1826,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 core_keystore,
                 ns,
             ),
+            #[cfg(feature = "large-ecc")]
             Mechanism::P521Prehashed => self.verify_ecdsa_prehashed(
                 req,
                 Kind::P521,
@@ -1830,6 +1851,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 core_keystore,
                 ns,
             ),
+            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1Prehashed => self.verify_ecdsa_prehashed(
                 req,
                 Kind::BrainpoolP512R1,
@@ -2078,9 +2100,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         match req.mechanism {
             Mechanism::P256 => self.deserialize_p256_key(req, core_keystore),
             Mechanism::P384 => self.deserialize_p384_key(req, core_keystore),
+            #[cfg(feature = "large-ecc")]
             Mechanism::P521 => self.deserialize_p521_key(req, core_keystore),
             Mechanism::BrainpoolP256R1 => self.deserialize_brainpool_p256r1_key(req, core_keystore),
             Mechanism::BrainpoolP384R1 => self.deserialize_brainpool_p384r1_key(req, core_keystore),
+            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1 => self.deserialize_brainpool_p512r1_key(req, core_keystore),
             Mechanism::X255 => self.deserialize_x255_key(req, core_keystore),
             Mechanism::Ed255 => self.deserialize_ed255_key(req, core_keystore),
@@ -2144,6 +2168,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         self.deserialize_ec_key(req, core_keystore, Kind::P384, SERIALIZED_P384_LEN)
     }
 
+    #[cfg(feature = "large-ecc")]
     fn deserialize_p521_key(
         &mut self,
         req: &request::DeserializeKey,
@@ -2178,6 +2203,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         )
     }
 
+    #[cfg(feature = "large-ecc")]
     fn deserialize_brainpool_p512r1_key(
         &mut self,
         req: &request::DeserializeKey,
@@ -2271,9 +2297,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         match req.mechanism {
             Mechanism::P256 => self.serialize_p256_key(req, core_keystore),
             Mechanism::P384 => self.serialize_p384_key(req, core_keystore),
+            #[cfg(feature = "large-ecc")]
             Mechanism::P521 => self.serialize_p521_key(req, core_keystore),
             Mechanism::BrainpoolP256R1 => self.serialize_brainpool_p256r1_key(req, core_keystore),
             Mechanism::BrainpoolP384R1 => self.serialize_brainpool_p384r1_key(req, core_keystore),
+            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1 => self.serialize_brainpool_p512r1_key(req, core_keystore),
             Mechanism::X255 => self.serialize_x255_key(req, core_keystore),
             Mechanism::Ed255 => self.serialize_ed255_key(req, core_keystore),
@@ -2328,6 +2356,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     ) -> Result<reply::SerializeKey, Error> {
         self.serialize_ec_key(req, core_keystore, Kind::P384, SERIALIZED_P384_LEN)
     }
+    #[cfg(feature = "large-ecc")]
     fn serialize_p521_key(
         &mut self,
         req: &request::SerializeKey,
@@ -2359,6 +2388,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             SERIALIZED_BRAINPOOL_P384R1_LEN,
         )
     }
+    #[cfg(feature = "large-ecc")]
     fn serialize_brainpool_p512r1_key(
         &mut self,
         req: &request::SerializeKey,
@@ -2600,9 +2630,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Kind::X255 => KeyType::X255,
             Kind::P256 => KeyType::P256,
             Kind::P384 => KeyType::P384,
+            #[cfg(feature = "large-ecc")]
             Kind::P521 => KeyType::P521,
             Kind::BrainpoolP256R1 => KeyType::BrainpoolP256R1,
             Kind::BrainpoolP384R1 => KeyType::BrainpoolP384R1,
+            #[cfg(feature = "large-ecc")]
             Kind::BrainpoolP512R1 => KeyType::BrainpoolP512R1,
             _ => return Err(Error::FunctionFailed),
         };
@@ -3013,9 +3045,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Mechanism::X255 => (Kind::X255, KeyType::X255),
             Mechanism::P256 => (Kind::P256, KeyType::P256),
             Mechanism::P384 => (Kind::P384, KeyType::P384),
+            #[cfg(feature = "large-ecc")]
             Mechanism::P521 => (Kind::P521, KeyType::P521),
             Mechanism::BrainpoolP256R1 => (Kind::BrainpoolP256R1, KeyType::BrainpoolP256R1),
             Mechanism::BrainpoolP384R1 => (Kind::BrainpoolP384R1, KeyType::BrainpoolP384R1),
+            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1 => (Kind::BrainpoolP512R1, KeyType::BrainpoolP512R1),
             Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => {
                 return self.unsafe_inject_volatile_rsa(
@@ -3153,6 +3187,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                         Error::FunctionFailed
                     })?;
             }
+            #[cfg(feature = "large-ecc")]
             Mechanism::P521 => {
                 // TODO: Find a way to get the public key, so that `derive` works
                 self.se
@@ -3210,6 +3245,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                         Error::FunctionFailed
                     })?;
             }
+            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1 => {
                 // TODO: Find a way to get the public key, so that `derive` works
                 self.se
@@ -3409,6 +3445,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                         Error::FunctionFailed
                     })?;
             }
+            #[cfg(feature = "large-ecc")]
             Mechanism::P521Prehashed | Mechanism::P521 => {
                 // TODO: Check if public key is required
                 self.se
@@ -3463,6 +3500,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                         Error::FunctionFailed
                     })?;
             }
+            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1Prehashed | Mechanism::BrainpoolP512R1 => {
                 // TODO: Find a way to get the public key, so that `derive` works
                 self.se
@@ -3501,9 +3539,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             // TODO First write curve somehow
             Mechanism::P256 => KeyType::P256,
             Mechanism::P384 => KeyType::P384,
+            #[cfg(feature = "large-ecc")]
             Mechanism::P521 => KeyType::P521,
             Mechanism::BrainpoolP256R1 => KeyType::BrainpoolP256R1,
             Mechanism::BrainpoolP384R1 => KeyType::BrainpoolP384R1,
+            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1 => KeyType::BrainpoolP512R1,
             Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => KeyType::Rsa2048,
             Mechanism::Rsa3072Raw | Mechanism::Rsa3072Pkcs1v15 => KeyType::Rsa3072,
@@ -3603,6 +3643,7 @@ fn generate_p384(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
     generate_ec_key(object_id, transient, EcCurve::NistP384)
 }
 
+#[cfg(feature = "large-ecc")]
 fn generate_p521(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
     generate_ec_key(object_id, transient, EcCurve::NistP521)
 }
@@ -3615,6 +3656,7 @@ fn generate_brainpool_p384r1(object_id: ObjectId, transient: bool) -> WriteEcKey
     generate_ec_key(object_id, transient, EcCurve::Brainpool384)
 }
 
+#[cfg(feature = "large-ecc")]
 fn generate_brainpool_p512r1(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
     generate_ec_key(object_id, transient, EcCurve::Brainpool512)
 }
@@ -3630,29 +3672,33 @@ fn generate_rsa(object_id: ObjectId, size: u16) -> WriteRsaKey<'static> {
 
 /// Returns true on mechanisms that are handled by the S050 backend
 fn supported(mechanism: Mechanism) -> bool {
-    matches!(
-        mechanism,
-        Mechanism::Ed255
-            | Mechanism::X255
-            | Mechanism::P256
-            | Mechanism::P256Prehashed
-            | Mechanism::P384
-            | Mechanism::P384Prehashed
-            | Mechanism::P521
-            | Mechanism::P521Prehashed
-            | Mechanism::BrainpoolP256R1
-            | Mechanism::BrainpoolP256R1Prehashed
-            | Mechanism::BrainpoolP384R1
-            | Mechanism::BrainpoolP384R1Prehashed
-            | Mechanism::BrainpoolP512R1
-            | Mechanism::BrainpoolP512R1Prehashed
-            | Mechanism::Rsa2048Raw
-            | Mechanism::Rsa3072Raw
-            | Mechanism::Rsa4096Raw
-            | Mechanism::Rsa2048Pkcs1v15
-            | Mechanism::Rsa3072Pkcs1v15
-            | Mechanism::Rsa4096Pkcs1v15
-    )
+    let supported = [
+        Mechanism::Ed255,
+        Mechanism::X255,
+        Mechanism::P256,
+        Mechanism::P256Prehashed,
+        Mechanism::P384,
+        Mechanism::P384Prehashed,
+        #[cfg(feature = "large-ecc")]
+        Mechanism::P521,
+        #[cfg(feature = "large-ecc")]
+        Mechanism::P521Prehashed,
+        Mechanism::BrainpoolP256R1,
+        Mechanism::BrainpoolP256R1Prehashed,
+        Mechanism::BrainpoolP384R1,
+        Mechanism::BrainpoolP384R1Prehashed,
+        #[cfg(feature = "large-ecc")]
+        Mechanism::BrainpoolP512R1,
+        #[cfg(feature = "large-ecc")]
+        Mechanism::BrainpoolP512R1Prehashed,
+        Mechanism::Rsa2048Raw,
+        Mechanism::Rsa3072Raw,
+        Mechanism::Rsa4096Raw,
+        Mechanism::Rsa2048Pkcs1v15,
+        Mechanism::Rsa3072Pkcs1v15,
+        Mechanism::Rsa4096Pkcs1v15,
+    ];
+    supported.contains(&mechanism)
 }
 
 impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
