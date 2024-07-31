@@ -44,6 +44,8 @@ use crate::{
     object_in_range, Context, Se050Backend, BACKEND_DIR,
 };
 
+mod ecdsa_der;
+
 pub(crate) const BUFFER_LEN: usize = 2048;
 pub(crate) const CORE_DIR: &str = "se050-core";
 
@@ -194,6 +196,17 @@ fn prepare_rsa_pkcs1v15(message: &[u8], keysize: usize) -> Result<Bytes<512>, Er
     data[keysize_bytes - message.len()..].copy_from_slice(message);
     Ok(data)
 }
+
+const SERIALIZED_P256_LEN: usize = 64;
+const SERIALIZED_P384_LEN: usize = 96;
+#[cfg(feature = "large-ecc")]
+const SERIALIZED_P521_LEN: usize = 128;
+const SERIALIZED_BRAINPOOL_P256R1_LEN: usize = 64;
+const SERIALIZED_BRAINPOOL_P384R1_LEN: usize = 96;
+#[cfg(feature = "large-ecc")]
+const SERIALIZED_BRAINPOOL_P512R1_LEN: usize = 128;
+
+const MAX_SERIALIZED_LEN: usize = 128;
 
 #[allow(clippy::too_many_arguments)]
 impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
@@ -550,6 +563,98 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
                 Ok(reply::DeriveKey { key: result })
             }
+            KeyType::P384 => {
+                let material = self
+                    .se
+                    .run_command(&ReadObject::builder().object_id(key).build(), buf)
+                    .map_err(|_err| {
+                        error!("Failed to read key for derive: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+
+                let result = core_keystore.store_key(
+                    req.attributes.persistence,
+                    Secrecy::Public,
+                    Kind::P384,
+                    material.data,
+                )?;
+
+                Ok(reply::DeriveKey { key: result })
+            }
+            #[cfg(feature = "large-ecc")]
+            KeyType::P521 => {
+                let material = self
+                    .se
+                    .run_command(&ReadObject::builder().object_id(key).build(), buf)
+                    .map_err(|_err| {
+                        error!("Failed to read key for derive: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+
+                let result = core_keystore.store_key(
+                    req.attributes.persistence,
+                    Secrecy::Public,
+                    Kind::P521,
+                    material.data,
+                )?;
+
+                Ok(reply::DeriveKey { key: result })
+            }
+            KeyType::BrainpoolP256R1 => {
+                let material = self
+                    .se
+                    .run_command(&ReadObject::builder().object_id(key).build(), buf)
+                    .map_err(|_err| {
+                        error!("Failed to read key for derive: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+
+                let result = core_keystore.store_key(
+                    req.attributes.persistence,
+                    Secrecy::Public,
+                    Kind::BrainpoolP256R1,
+                    material.data,
+                )?;
+
+                Ok(reply::DeriveKey { key: result })
+            }
+            KeyType::BrainpoolP384R1 => {
+                let material = self
+                    .se
+                    .run_command(&ReadObject::builder().object_id(key).build(), buf)
+                    .map_err(|_err| {
+                        error!("Failed to read key for derive: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+
+                let result = core_keystore.store_key(
+                    req.attributes.persistence,
+                    Secrecy::Public,
+                    Kind::BrainpoolP384R1,
+                    material.data,
+                )?;
+
+                Ok(reply::DeriveKey { key: result })
+            }
+            #[cfg(feature = "large-ecc")]
+            KeyType::BrainpoolP512R1 => {
+                let material = self
+                    .se
+                    .run_command(&ReadObject::builder().object_id(key).build(), buf)
+                    .map_err(|_err| {
+                        error!("Failed to read key for derive: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+
+                let result = core_keystore.store_key(
+                    req.attributes.persistence,
+                    Secrecy::Public,
+                    Kind::BrainpoolP512R1,
+                    material.data,
+                )?;
+
+                Ok(reply::DeriveKey { key: result })
+            }
             KeyType::Rsa2048 | KeyType::Rsa3072 | KeyType::Rsa4096 => {
                 self.derive_rsa_key(req, key, ty, core_keystore)
             }
@@ -626,6 +731,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             KeyType::Ed255 => Kind::Ed255,
             KeyType::X255 => Kind::X255,
             KeyType::P256 => Kind::P256,
+            KeyType::P384 => Kind::P384,
+            #[cfg(feature = "large-ecc")]
+            KeyType::P521 => Kind::P521,
+            KeyType::BrainpoolP256R1 => Kind::BrainpoolP256R1,
+            KeyType::BrainpoolP384R1 => Kind::BrainpoolP384R1,
+            #[cfg(feature = "large-ecc")]
+            KeyType::BrainpoolP512R1 => Kind::BrainpoolP512R1,
             KeyType::Rsa2048 | KeyType::Rsa3072 | KeyType::Rsa4096 => {
                 unreachable!("Volatile rsa keys are derived in a separate function")
             }
@@ -847,6 +959,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Mechanism::Ed255 => (Kind::Ed255, KeyType::Ed255),
             Mechanism::X255 => (Kind::X255, KeyType::X255),
             Mechanism::P256 => (Kind::P256, KeyType::P256),
+            Mechanism::P384 => (Kind::P384, KeyType::P384),
+            #[cfg(feature = "large-ecc")]
+            Mechanism::P521 => (Kind::P521, KeyType::P521),
+            Mechanism::BrainpoolP256R1 => (Kind::BrainpoolP256R1, KeyType::BrainpoolP256R1),
+            Mechanism::BrainpoolP384R1 => (Kind::BrainpoolP384R1, KeyType::BrainpoolP384R1),
+            #[cfg(feature = "large-ecc")]
+            Mechanism::BrainpoolP512R1 => (Kind::BrainpoolP512R1, KeyType::BrainpoolP512R1),
             Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => {
                 return self.generate_volatile_rsa_key(
                     se050_keystore,
@@ -905,19 +1024,62 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     error!("Failed to generate volatile key: {_err:?}");
                     Error::FunctionFailed
                 })?,
+            Mechanism::P384 => self
+                .se
+                .run_command(&generate_p384(object_id.0, true), buf)
+                .map_err(|_err| {
+                    error!("Failed to generate volatile key: {_err:?}");
+                    Error::FunctionFailed
+                })?,
+            #[cfg(feature = "large-ecc")]
+            Mechanism::P521 => self
+                .se
+                .run_command(&generate_p521(object_id.0, true), buf)
+                .map_err(|_err| {
+                    error!("Failed to generate volatile key: {_err:?}");
+                    Error::FunctionFailed
+                })?,
+            Mechanism::BrainpoolP256R1 => self
+                .se
+                .run_command(&generate_brainpool_p256r1(object_id.0, true), buf)
+                .map_err(|_err| {
+                    error!("Failed to generate volatile key: {_err:?}");
+                    Error::FunctionFailed
+                })?,
+            Mechanism::BrainpoolP384R1 => self
+                .se
+                .run_command(&generate_brainpool_p384r1(object_id.0, true), buf)
+                .map_err(|_err| {
+                    error!("Failed to generate volatile key: {_err:?}");
+                    Error::FunctionFailed
+                })?,
+            #[cfg(feature = "large-ecc")]
+            Mechanism::BrainpoolP512R1 => self
+                .se
+                .run_command(&generate_brainpool_p512r1(object_id.0, true), buf)
+                .map_err(|_err| {
+                    error!("Failed to generate volatile key: {_err:?}");
+                    Error::FunctionFailed
+                })?,
             _ => unreachable!(),
         }
         let exported = self
             .se
             .run_command(&ExportObject::builder().object_id(object_id.0).build(), buf)
-            .or(Err(Error::FunctionFailed))?
+            .map_err(|_err| {
+                error!("Failed to export generated key: {_err:?}");
+                Error::FunctionFailed
+            })?
             .data;
         let key = key_id_for_obj(object_id.0, ty);
         let material: Bytes<1024> = trussed::cbor_serialize_bytes(&VolatileKeyMaterialRef {
             object_id,
             exported_material: exported,
         })
-        .or(Err(Error::FunctionFailed))?;
+        .map_err(|_err| {
+            error!("Failed to serialize exported key: {_err:?}");
+            Error::FunctionFailed
+        })?;
         se050_keystore.overwrite_key(Location::Volatile, Secrecy::Secret, kind, &key, &material)?;
 
         // Remove any data from the transient storage
@@ -960,6 +1122,50 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     Error::FunctionFailed
                 })?,
             Mechanism::P256Prehashed => return Err(Error::MechanismParamInvalid),
+            Mechanism::P384 => self
+                .se
+                .run_command(&generate_p384(object_id.0, false), buf)
+                .map_err(|_err| {
+                    error!("Failed to generate key: {_err:?}");
+                    Error::FunctionFailed
+                })?,
+            Mechanism::P384Prehashed => return Err(Error::MechanismParamInvalid),
+            #[cfg(feature = "large-ecc")]
+            Mechanism::P521 => self
+                .se
+                .run_command(&generate_p521(object_id.0, false), buf)
+                .map_err(|_err| {
+                    error!("Failed to generate key: {_err:?}");
+                    Error::FunctionFailed
+                })?,
+            #[cfg(feature = "large-ecc")]
+            Mechanism::P521Prehashed => return Err(Error::MechanismParamInvalid),
+            Mechanism::BrainpoolP256R1 => self
+                .se
+                .run_command(&generate_brainpool_p256r1(object_id.0, false), buf)
+                .map_err(|_err| {
+                    error!("Failed to generate brainpool_key: {_err:?}");
+                    Error::FunctionFailed
+                })?,
+            Mechanism::BrainpoolP256R1Prehashed => return Err(Error::MechanismParamInvalid),
+            Mechanism::BrainpoolP384R1 => self
+                .se
+                .run_command(&generate_brainpool_p384r1(object_id.0, false), buf)
+                .map_err(|_err| {
+                    error!("Failed to generate brainpool_key: {_err:?}");
+                    Error::FunctionFailed
+                })?,
+            Mechanism::BrainpoolP384R1Prehashed => return Err(Error::MechanismParamInvalid),
+            #[cfg(feature = "large-ecc")]
+            Mechanism::BrainpoolP512R1 => self
+                .se
+                .run_command(&generate_brainpool_p512r1(object_id.0, false), buf)
+                .map_err(|_err| {
+                    error!("Failed to generate key: {_err:?}");
+                    Error::FunctionFailed
+                })?,
+            #[cfg(feature = "large-ecc")]
+            Mechanism::BrainpoolP512R1Prehashed => return Err(Error::MechanismParamInvalid),
             Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => self
                 .se
                 .run_command(&generate_rsa(object_id.0, 2048), buf)
@@ -992,6 +1198,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
             // TODO First write curve somehow
             Mechanism::P256 => KeyType::P256,
+            Mechanism::P384 => KeyType::P384,
+            #[cfg(feature = "large-ecc")]
+            Mechanism::P521 => KeyType::P521,
+            Mechanism::BrainpoolP256R1 => KeyType::BrainpoolP256R1,
+            Mechanism::BrainpoolP384R1 => KeyType::BrainpoolP384R1,
+            #[cfg(feature = "large-ecc")]
+            Mechanism::BrainpoolP512R1 => KeyType::BrainpoolP512R1,
             Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => KeyType::Rsa2048,
             Mechanism::Rsa3072Raw | Mechanism::Rsa3072Pkcs1v15 => KeyType::Rsa3072,
             Mechanism::Rsa4096Raw | Mechanism::Rsa4096Pkcs1v15 => KeyType::Rsa4096,
@@ -1016,6 +1229,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
         let kind = match (req.mechanism, priv_parsed_ty) {
             (Mechanism::P256, KeyType::P256) => Kind::P256,
+            (Mechanism::P384, KeyType::P384) => Kind::P384,
+            #[cfg(feature = "large-ecc")]
+            (Mechanism::P521, KeyType::P521) => Kind::P521,
+            (Mechanism::BrainpoolP256R1, KeyType::BrainpoolP256R1) => Kind::BrainpoolP256R1,
+            (Mechanism::BrainpoolP384R1, KeyType::BrainpoolP384R1) => Kind::BrainpoolP384R1,
+            #[cfg(feature = "large-ecc")]
+            (Mechanism::BrainpoolP512R1, KeyType::BrainpoolP512R1) => Kind::BrainpoolP512R1,
             (Mechanism::X255, KeyType::X255) => Kind::X255,
             _ => return Err(Error::WrongKeyKind),
         };
@@ -1295,11 +1515,21 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         ns: NamespaceValue,
     ) -> Result<reply::Sign, Error> {
         match req.mechanism {
-            Mechanism::P256 => {
-                debug!("TODO: Implement P256 without prehashing");
+            Mechanism::P256
+            | Mechanism::P384
+            | Mechanism::P521
+            | Mechanism::BrainpoolP256R1
+            | Mechanism::BrainpoolP384R1
+            | Mechanism::BrainpoolP512R1 => {
+                debug!("TODO: Implement EcDsa without prehashing");
                 Err(Error::FunctionNotSupported)
             }
-            Mechanism::P256Prehashed => self.sign_ecdsa(req, se050_keystore, ns),
+            Mechanism::P256Prehashed
+            | Mechanism::P384Prehashed
+            | Mechanism::P521Prehashed
+            | Mechanism::BrainpoolP256R1Prehashed
+            | Mechanism::BrainpoolP384R1Prehashed
+            | Mechanism::BrainpoolP512R1Prehashed => self.sign_ecdsa(req, se050_keystore, ns),
             Mechanism::Ed255 => self.sign_eddsa(req, se050_keystore, ns),
             Mechanism::Rsa2048Pkcs1v15
             | Mechanism::Rsa3072Pkcs1v15
@@ -1443,8 +1673,27 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let (parsed_key, parsed_ty) =
             parse_key_id(req.key, ns).ok_or(Error::RequestNotAvailable)?;
 
-        let (kind, algo) = match (req.mechanism, parsed_ty) {
-            (Mechanism::P256Prehashed, KeyType::P256) => (Kind::P256, EcDsaSignatureAlgo::Sha256),
+        let (kind, algo, field_byte_size) = match (req.mechanism, parsed_ty) {
+            (Mechanism::P256Prehashed, KeyType::P256) => {
+                (Kind::P256, EcDsaSignatureAlgo::Sha256, 32)
+            }
+            (Mechanism::P384Prehashed, KeyType::P384) => {
+                (Kind::P384, EcDsaSignatureAlgo::Sha384, 48)
+            }
+            #[cfg(feature = "large-ecc")]
+            (Mechanism::P521Prehashed, KeyType::P521) => {
+                (Kind::P521, EcDsaSignatureAlgo::Sha512, 66)
+            }
+            (Mechanism::BrainpoolP256R1Prehashed, KeyType::BrainpoolP256R1) => {
+                (Kind::BrainpoolP256R1, EcDsaSignatureAlgo::Sha256, 32)
+            }
+            (Mechanism::BrainpoolP384R1Prehashed, KeyType::BrainpoolP384R1) => {
+                (Kind::BrainpoolP384R1, EcDsaSignatureAlgo::Sha384, 48)
+            }
+            #[cfg(feature = "large-ecc")]
+            (Mechanism::BrainpoolP512R1Prehashed, KeyType::BrainpoolP512R1) => {
+                (Kind::BrainpoolP512R1, EcDsaSignatureAlgo::Sha512, 64)
+            }
             _ => return Err(Error::WrongKeyKind),
         };
 
@@ -1474,14 +1723,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Error::FunctionFailed
             })?;
 
-        let signature_der = p256::ecdsa::Signature::from_der(res.signature).map_err(|_err| {
-            error!("Failed to parse p256 signature: {_err:?}");
+        let signature_der = ecdsa_der::DerSignature::from_der(res.signature).map_err(|_err| {
+            error!("Failed to parse DER signature: {_err:?}");
             Error::FunctionFailed
         })?;
         let mut signature = Bytes::new();
-        signature
-            .extend_from_slice(&signature_der.to_bytes())
-            .unwrap();
+        assert!(signature.capacity() > 2 * field_byte_size);
+        signature.extend(signature_der.to_bytes(field_byte_size));
 
         if let ParsedObjectId::VolatileKey(_) = parsed_key {
             self.reselect()?;
@@ -1553,8 +1801,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         ns: NamespaceValue,
     ) -> Result<reply::Verify, Error> {
         match req.mechanism {
-            Mechanism::P256 => {
-                debug!("Implement P256 without prehashing");
+            Mechanism::P256
+            | Mechanism::P384
+            | Mechanism::P521
+            | Mechanism::BrainpoolP256R1
+            | Mechanism::BrainpoolP384R1
+            | Mechanism::BrainpoolP512R1 => {
+                debug!("Implement EcDSA verification without prehashing");
                 Err(Error::FunctionNotSupported)
             }
             Mechanism::P256Prehashed => self.verify_ecdsa_prehashed(
@@ -1562,6 +1815,48 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 Kind::P256,
                 EcCurve::NistP256,
                 EcDsaSignatureAlgo::Sha256,
+                core_keystore,
+                ns,
+            ),
+            Mechanism::P384Prehashed => self.verify_ecdsa_prehashed(
+                req,
+                Kind::P384,
+                EcCurve::NistP384,
+                EcDsaSignatureAlgo::Sha384,
+                core_keystore,
+                ns,
+            ),
+            #[cfg(feature = "large-ecc")]
+            Mechanism::P521Prehashed => self.verify_ecdsa_prehashed(
+                req,
+                Kind::P521,
+                EcCurve::NistP521,
+                EcDsaSignatureAlgo::Sha512,
+                core_keystore,
+                ns,
+            ),
+            Mechanism::BrainpoolP256R1Prehashed => self.verify_ecdsa_prehashed(
+                req,
+                Kind::BrainpoolP256R1,
+                EcCurve::Brainpool256,
+                EcDsaSignatureAlgo::Sha256,
+                core_keystore,
+                ns,
+            ),
+            Mechanism::BrainpoolP384R1Prehashed => self.verify_ecdsa_prehashed(
+                req,
+                Kind::BrainpoolP384R1,
+                EcCurve::Brainpool384,
+                EcDsaSignatureAlgo::Sha384,
+                core_keystore,
+                ns,
+            ),
+            #[cfg(feature = "large-ecc")]
+            Mechanism::BrainpoolP512R1Prehashed => self.verify_ecdsa_prehashed(
+                req,
+                Kind::BrainpoolP512R1,
+                EcCurve::Brainpool512,
+                EcDsaSignatureAlgo::Sha512,
                 core_keystore,
                 ns,
             ),
@@ -1804,6 +2099,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     ) -> Result<reply::DeserializeKey, Error> {
         match req.mechanism {
             Mechanism::P256 => self.deserialize_p256_key(req, core_keystore),
+            Mechanism::P384 => self.deserialize_p384_key(req, core_keystore),
+            #[cfg(feature = "large-ecc")]
+            Mechanism::P521 => self.deserialize_p521_key(req, core_keystore),
+            Mechanism::BrainpoolP256R1 => self.deserialize_brainpool_p256r1_key(req, core_keystore),
+            Mechanism::BrainpoolP384R1 => self.deserialize_brainpool_p384r1_key(req, core_keystore),
+            #[cfg(feature = "large-ecc")]
+            Mechanism::BrainpoolP512R1 => self.deserialize_brainpool_p512r1_key(req, core_keystore),
             Mechanism::X255 => self.deserialize_x255_key(req, core_keystore),
             Mechanism::Ed255 => self.deserialize_ed255_key(req, core_keystore),
             Mechanism::Rsa2048Pkcs1v15 => {
@@ -1819,34 +2121,102 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         }
     }
 
-    fn deserialize_p256_key(
+    fn deserialize_ec_key(
         &mut self,
         req: &request::DeserializeKey,
         core_keystore: &mut impl Keystore,
+        kind: Kind,
+        expected_len: usize,
     ) -> Result<reply::DeserializeKey, Error> {
         if req.format != KeySerialization::Raw {
-            debug!("Unsupported P256 public format: {:?}", req.format);
+            debug!("Unsupported ECC public format: {:?}", req.format);
             return Err(Error::FunctionFailed);
         }
 
-        if req.serialized_key.len() != 64 {
+        if req.serialized_key.len() != expected_len {
             debug!(
-                "Unsupported P256 public key length: {}",
+                "Unsupported ECC public key length: {}",
                 req.serialized_key.len()
             );
             return Err(Error::MechanismParamInvalid);
         }
-        let mut material = Bytes::<65>::new();
+        let mut material = Bytes::<{ MAX_SERIALIZED_LEN + 1 }>::new();
         material.push(0x04).unwrap();
         material.extend_from_slice(&req.serialized_key).unwrap();
         let key = core_keystore.store_key(
             req.attributes.persistence,
             Secrecy::Public,
-            Kind::P256,
+            kind,
             &material,
         )?;
         Ok(reply::DeserializeKey { key })
     }
+
+    fn deserialize_p256_key(
+        &mut self,
+        req: &request::DeserializeKey,
+        core_keystore: &mut impl Keystore,
+    ) -> Result<reply::DeserializeKey, Error> {
+        self.deserialize_ec_key(req, core_keystore, Kind::P256, SERIALIZED_P256_LEN)
+    }
+
+    fn deserialize_p384_key(
+        &mut self,
+        req: &request::DeserializeKey,
+        core_keystore: &mut impl Keystore,
+    ) -> Result<reply::DeserializeKey, Error> {
+        self.deserialize_ec_key(req, core_keystore, Kind::P384, SERIALIZED_P384_LEN)
+    }
+
+    #[cfg(feature = "large-ecc")]
+    fn deserialize_p521_key(
+        &mut self,
+        req: &request::DeserializeKey,
+        core_keystore: &mut impl Keystore,
+    ) -> Result<reply::DeserializeKey, Error> {
+        self.deserialize_ec_key(req, core_keystore, Kind::P521, SERIALIZED_P521_LEN)
+    }
+
+    fn deserialize_brainpool_p256r1_key(
+        &mut self,
+        req: &request::DeserializeKey,
+        core_keystore: &mut impl Keystore,
+    ) -> Result<reply::DeserializeKey, Error> {
+        self.deserialize_ec_key(
+            req,
+            core_keystore,
+            Kind::BrainpoolP256R1,
+            SERIALIZED_BRAINPOOL_P256R1_LEN,
+        )
+    }
+
+    fn deserialize_brainpool_p384r1_key(
+        &mut self,
+        req: &request::DeserializeKey,
+        core_keystore: &mut impl Keystore,
+    ) -> Result<reply::DeserializeKey, Error> {
+        self.deserialize_ec_key(
+            req,
+            core_keystore,
+            Kind::BrainpoolP384R1,
+            SERIALIZED_BRAINPOOL_P384R1_LEN,
+        )
+    }
+
+    #[cfg(feature = "large-ecc")]
+    fn deserialize_brainpool_p512r1_key(
+        &mut self,
+        req: &request::DeserializeKey,
+        core_keystore: &mut impl Keystore,
+    ) -> Result<reply::DeserializeKey, Error> {
+        self.deserialize_ec_key(
+            req,
+            core_keystore,
+            Kind::BrainpoolP512R1,
+            SERIALIZED_BRAINPOOL_P512R1_LEN,
+        )
+    }
+
     fn deserialize_x255_key(
         &mut self,
         req: &request::DeserializeKey,
@@ -1926,6 +2296,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     ) -> Result<reply::SerializeKey, Error> {
         match req.mechanism {
             Mechanism::P256 => self.serialize_p256_key(req, core_keystore),
+            Mechanism::P384 => self.serialize_p384_key(req, core_keystore),
+            #[cfg(feature = "large-ecc")]
+            Mechanism::P521 => self.serialize_p521_key(req, core_keystore),
+            Mechanism::BrainpoolP256R1 => self.serialize_brainpool_p256r1_key(req, core_keystore),
+            Mechanism::BrainpoolP384R1 => self.serialize_brainpool_p384r1_key(req, core_keystore),
+            #[cfg(feature = "large-ecc")]
+            Mechanism::BrainpoolP512R1 => self.serialize_brainpool_p512r1_key(req, core_keystore),
             Mechanism::X255 => self.serialize_x255_key(req, core_keystore),
             Mechanism::Ed255 => self.serialize_ed255_key(req, core_keystore),
             Mechanism::Rsa2048Pkcs1v15 | Mechanism::Rsa2048Raw => {
@@ -1940,26 +2317,89 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             _ => Err(Error::MechanismParamInvalid),
         }
     }
+
+    fn serialize_ec_key(
+        &mut self,
+        req: &request::SerializeKey,
+        core_keystore: &mut impl Keystore,
+        kind: Kind,
+        expected_len: usize,
+    ) -> Result<reply::SerializeKey, Error> {
+        if req.format != KeySerialization::Raw {
+            debug!("Unsupported EC public format: {:?}", req.format);
+            return Err(Error::FunctionFailed);
+        }
+
+        let mut data = core_keystore.load_key(Secrecy::Public, Some(kind), &req.key)?;
+        if data.material.len() != expected_len + 1 {
+            debug!("Incorrect EC public key length: {}", data.material.len());
+            return Err(Error::FunctionFailed);
+        }
+        data.material.copy_within(1.., 0);
+        data.material.truncate(expected_len);
+        Ok(reply::SerializeKey {
+            serialized_key: data.material.into(),
+        })
+    }
+
     fn serialize_p256_key(
         &mut self,
         req: &request::SerializeKey,
         core_keystore: &mut impl Keystore,
     ) -> Result<reply::SerializeKey, Error> {
-        if req.format != KeySerialization::Raw {
-            debug!("Unsupported P256 public format: {:?}", req.format);
-            return Err(Error::FunctionFailed);
-        }
-
-        let mut data = core_keystore.load_key(Secrecy::Public, Some(Kind::P256), &req.key)?;
-        if data.material.len() != 65 {
-            debug!("Incorrect P256 public key length: {}", data.material.len());
-            return Err(Error::FunctionFailed);
-        }
-        data.material.rotate_left(1);
-        data.material.resize(64, 0).unwrap();
-        Ok(reply::SerializeKey {
-            serialized_key: data.material.into(),
-        })
+        self.serialize_ec_key(req, core_keystore, Kind::P256, SERIALIZED_P256_LEN)
+    }
+    fn serialize_p384_key(
+        &mut self,
+        req: &request::SerializeKey,
+        core_keystore: &mut impl Keystore,
+    ) -> Result<reply::SerializeKey, Error> {
+        self.serialize_ec_key(req, core_keystore, Kind::P384, SERIALIZED_P384_LEN)
+    }
+    #[cfg(feature = "large-ecc")]
+    fn serialize_p521_key(
+        &mut self,
+        req: &request::SerializeKey,
+        core_keystore: &mut impl Keystore,
+    ) -> Result<reply::SerializeKey, Error> {
+        self.serialize_ec_key(req, core_keystore, Kind::P521, SERIALIZED_P521_LEN)
+    }
+    fn serialize_brainpool_p256r1_key(
+        &mut self,
+        req: &request::SerializeKey,
+        core_keystore: &mut impl Keystore,
+    ) -> Result<reply::SerializeKey, Error> {
+        self.serialize_ec_key(
+            req,
+            core_keystore,
+            Kind::BrainpoolP256R1,
+            SERIALIZED_BRAINPOOL_P256R1_LEN,
+        )
+    }
+    fn serialize_brainpool_p384r1_key(
+        &mut self,
+        req: &request::SerializeKey,
+        core_keystore: &mut impl Keystore,
+    ) -> Result<reply::SerializeKey, Error> {
+        self.serialize_ec_key(
+            req,
+            core_keystore,
+            Kind::BrainpoolP384R1,
+            SERIALIZED_BRAINPOOL_P384R1_LEN,
+        )
+    }
+    #[cfg(feature = "large-ecc")]
+    fn serialize_brainpool_p512r1_key(
+        &mut self,
+        req: &request::SerializeKey,
+        core_keystore: &mut impl Keystore,
+    ) -> Result<reply::SerializeKey, Error> {
+        self.serialize_ec_key(
+            req,
+            core_keystore,
+            Kind::BrainpoolP512R1,
+            SERIALIZED_BRAINPOOL_P512R1_LEN,
+        )
     }
     fn serialize_x255_key(
         &mut self,
@@ -2189,6 +2629,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Kind::Ed255 => KeyType::Ed255,
             Kind::X255 => KeyType::X255,
             Kind::P256 => KeyType::P256,
+            Kind::P384 => KeyType::P384,
+            #[cfg(feature = "large-ecc")]
+            Kind::P521 => KeyType::P521,
+            Kind::BrainpoolP256R1 => KeyType::BrainpoolP256R1,
+            Kind::BrainpoolP384R1 => KeyType::BrainpoolP384R1,
+            #[cfg(feature = "large-ecc")]
+            Kind::BrainpoolP512R1 => KeyType::BrainpoolP512R1,
             _ => return Err(Error::FunctionFailed),
         };
         let key_id = match ty {
@@ -2203,7 +2650,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     return Err(Error::ObjectHandleInvalid);
                 }
                 self.ensure_exists(mat.object_id.0, &mut [0; 128])?;
-
                 key_id_for_obj(mat.object_id.0, key_ty)
             }
             WrappedKeyType::VolatileRsa => {
@@ -2598,6 +3044,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Mechanism::Ed255 => (Kind::Ed255, KeyType::Ed255),
             Mechanism::X255 => (Kind::X255, KeyType::X255),
             Mechanism::P256 => (Kind::P256, KeyType::P256),
+            Mechanism::P384 => (Kind::P384, KeyType::P384),
+            #[cfg(feature = "large-ecc")]
+            Mechanism::P521 => (Kind::P521, KeyType::P521),
+            Mechanism::BrainpoolP256R1 => (Kind::BrainpoolP256R1, KeyType::BrainpoolP256R1),
+            Mechanism::BrainpoolP384R1 => (Kind::BrainpoolP384R1, KeyType::BrainpoolP384R1),
+            #[cfg(feature = "large-ecc")]
+            Mechanism::BrainpoolP512R1 => (Kind::BrainpoolP512R1, KeyType::BrainpoolP512R1),
             Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => {
                 return self.unsafe_inject_volatile_rsa(
                     req,
@@ -2706,6 +3159,103 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                             .policy(POLICY)
                             .transient(true)
                             .curve(EcCurve::NistP256)
+                            .object_id(*id)
+                            .build(),
+                        buf,
+                    )
+                    .map_err(|_err| {
+                        error!("Failed to inject key: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+            }
+            Mechanism::P384 => {
+                // TODO: Find a way to get the public key, so that `derive` works
+                self.se
+                    .run_command(
+                        &WriteEcKey::builder()
+                            .key_type(P1KeyType::Private)
+                            .private_key(&req.raw_key)
+                            .policy(POLICY)
+                            .transient(true)
+                            .curve(EcCurve::NistP384)
+                            .object_id(*id)
+                            .build(),
+                        buf,
+                    )
+                    .map_err(|_err| {
+                        error!("Failed to inject key: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+            }
+            #[cfg(feature = "large-ecc")]
+            Mechanism::P521 => {
+                // TODO: Find a way to get the public key, so that `derive` works
+                self.se
+                    .run_command(
+                        &WriteEcKey::builder()
+                            .key_type(P1KeyType::Private)
+                            .private_key(&req.raw_key)
+                            .policy(POLICY)
+                            .transient(true)
+                            .curve(EcCurve::NistP521)
+                            .object_id(*id)
+                            .build(),
+                        buf,
+                    )
+                    .map_err(|_err| {
+                        error!("Failed to inject key: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+            }
+            Mechanism::BrainpoolP256R1 => {
+                // TODO: Find a way to get the public key, so that `derive` works
+                self.se
+                    .run_command(
+                        &WriteEcKey::builder()
+                            .key_type(P1KeyType::Private)
+                            .private_key(&req.raw_key)
+                            .policy(POLICY)
+                            .transient(true)
+                            .curve(EcCurve::Brainpool256)
+                            .object_id(*id)
+                            .build(),
+                        buf,
+                    )
+                    .map_err(|_err| {
+                        error!("Failed to inject key: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+            }
+            Mechanism::BrainpoolP384R1 => {
+                // TODO: Find a way to get the public key, so that `derive` works
+                self.se
+                    .run_command(
+                        &WriteEcKey::builder()
+                            .key_type(P1KeyType::Private)
+                            .private_key(&req.raw_key)
+                            .policy(POLICY)
+                            .transient(true)
+                            .curve(EcCurve::Brainpool384)
+                            .object_id(*id)
+                            .build(),
+                        buf,
+                    )
+                    .map_err(|_err| {
+                        error!("Failed to inject key: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+            }
+            #[cfg(feature = "large-ecc")]
+            Mechanism::BrainpoolP512R1 => {
+                // TODO: Find a way to get the public key, so that `derive` works
+                self.se
+                    .run_command(
+                        &WriteEcKey::builder()
+                            .key_type(P1KeyType::Private)
+                            .private_key(&req.raw_key)
+                            .policy(POLICY)
+                            .transient(true)
+                            .curve(EcCurve::Brainpool512)
                             .object_id(*id)
                             .build(),
                         buf,
@@ -2860,20 +3410,106 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     })?;
             }
             Mechanism::P256Prehashed | Mechanism::P256 => {
-                let private =
-                    p256_cortex_m4::SecretKey::from_bytes(&req.raw_key).map_err(|_| {
-                        debug!("Raw key is invalid");
-                        Error::InvalidSerializedKey
+                // TODO: Find a way to get the public key, so that `derive` works
+                self.se
+                    .run_command(
+                        &WriteEcKey::builder()
+                            .key_type(P1KeyType::Private)
+                            .private_key(&req.raw_key)
+                            .policy(POLICY)
+                            .curve(EcCurve::NistP256)
+                            .object_id(*id)
+                            .build(),
+                        buf,
+                    )
+                    .map_err(|_err| {
+                        error!("Failed to inject key: {_err:?}");
+                        Error::FunctionFailed
                     })?;
-                let public_key = private.public_key().to_uncompressed_sec1_bytes();
+            }
+            Mechanism::P384Prehashed | Mechanism::P384 => {
+                // TODO: Find a way to get the public key, so that `derive` works
+                self.se
+                    .run_command(
+                        &WriteEcKey::builder()
+                            .key_type(P1KeyType::Private)
+                            .private_key(&req.raw_key)
+                            .policy(POLICY)
+                            .curve(EcCurve::NistP384)
+                            .object_id(*id)
+                            .build(),
+                        buf,
+                    )
+                    .map_err(|_err| {
+                        error!("Failed to inject key: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+            }
+            #[cfg(feature = "large-ecc")]
+            Mechanism::P521Prehashed | Mechanism::P521 => {
+                // TODO: Check if public key is required
                 self.se
                     .run_command(
                         &WriteEcKey::builder()
                             .key_type(P1KeyType::KeyPair)
                             .private_key(&req.raw_key)
-                            .public_key(&public_key)
                             .policy(POLICY)
-                            .curve(EcCurve::NistP256)
+                            .curve(EcCurve::NistP521)
+                            .object_id(*id)
+                            .build(),
+                        buf,
+                    )
+                    .map_err(|_err| {
+                        error!("Failed to inject key: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+            }
+            Mechanism::BrainpoolP256R1Prehashed | Mechanism::BrainpoolP256R1 => {
+                // TODO: Find a way to get the public key, so that `derive` works
+                self.se
+                    .run_command(
+                        &WriteEcKey::builder()
+                            .key_type(P1KeyType::Private)
+                            .private_key(&req.raw_key)
+                            .policy(POLICY)
+                            .curve(EcCurve::Brainpool256)
+                            .object_id(*id)
+                            .build(),
+                        buf,
+                    )
+                    .map_err(|_err| {
+                        error!("Failed to inject key: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+            }
+            Mechanism::BrainpoolP384R1Prehashed | Mechanism::BrainpoolP384R1 => {
+                // TODO: Find a way to get the public key, so that `derive` works
+                self.se
+                    .run_command(
+                        &WriteEcKey::builder()
+                            .key_type(P1KeyType::Private)
+                            .private_key(&req.raw_key)
+                            .policy(POLICY)
+                            .curve(EcCurve::Brainpool384)
+                            .object_id(*id)
+                            .build(),
+                        buf,
+                    )
+                    .map_err(|_err| {
+                        error!("Failed to inject key: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+            }
+            #[cfg(feature = "large-ecc")]
+            Mechanism::BrainpoolP512R1Prehashed | Mechanism::BrainpoolP512R1 => {
+                // TODO: Find a way to get the public key, so that `derive` works
+                self.se
+                    .run_command(
+                        &WriteEcKey::builder()
+                            .key_type(P1KeyType::Private)
+                            .private_key(&req.raw_key)
+                            .policy(POLICY)
+                            .curve(EcCurve::Brainpool512)
                             .object_id(*id)
                             .build(),
                         buf,
@@ -2902,6 +3538,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
             // TODO First write curve somehow
             Mechanism::P256 => KeyType::P256,
+            Mechanism::P384 => KeyType::P384,
+            #[cfg(feature = "large-ecc")]
+            Mechanism::P521 => KeyType::P521,
+            Mechanism::BrainpoolP256R1 => KeyType::BrainpoolP256R1,
+            Mechanism::BrainpoolP384R1 => KeyType::BrainpoolP384R1,
+            #[cfg(feature = "large-ecc")]
+            Mechanism::BrainpoolP512R1 => KeyType::BrainpoolP512R1,
             Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => KeyType::Rsa2048,
             Mechanism::Rsa3072Raw | Mechanism::Rsa3072Pkcs1v15 => KeyType::Rsa3072,
             Mechanism::Rsa4096Raw | Mechanism::Rsa4096Pkcs1v15 => KeyType::Rsa4096,
@@ -2922,7 +3565,20 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     ) -> Result<reply::UnsafeInjectKey, Error> {
         match (req.mechanism, req.format) {
             (
-                Mechanism::Ed255 | Mechanism::X255 | Mechanism::P256 | Mechanism::P256Prehashed,
+                Mechanism::Ed255
+                | Mechanism::X255
+                | Mechanism::P256
+                | Mechanism::P384
+                | Mechanism::P521
+                | Mechanism::P256Prehashed
+                | Mechanism::P384Prehashed
+                | Mechanism::P521Prehashed
+                | Mechanism::BrainpoolP256R1
+                | Mechanism::BrainpoolP384R1
+                | Mechanism::BrainpoolP512R1
+                | Mechanism::BrainpoolP256R1Prehashed
+                | Mechanism::BrainpoolP384R1Prehashed
+                | Mechanism::BrainpoolP512R1Prehashed,
                 KeySerialization::Raw,
             ) => {}
             (
@@ -2961,34 +3617,48 @@ const POLICY: PolicySet<'static> = PolicySet(&[Policy {
     ),
 }]);
 
-fn generate_ed255(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
+fn generate_ec_key(object_id: ObjectId, transient: bool, curve: EcCurve) -> WriteEcKey<'static> {
     WriteEcKey::builder()
         .transient(transient)
         .key_type(P1KeyType::KeyPair)
         .policy(POLICY)
         .object_id(object_id)
-        .curve(EcCurve::IdEccEd25519)
+        .curve(curve)
         .build()
+}
+
+fn generate_ed255(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
+    generate_ec_key(object_id, transient, EcCurve::IdEccEd25519)
 }
 
 fn generate_x255(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
-    WriteEcKey::builder()
-        .transient(transient)
-        .key_type(P1KeyType::KeyPair)
-        .policy(POLICY)
-        .object_id(object_id)
-        .curve(EcCurve::IdEccMontDh25519)
-        .build()
+    generate_ec_key(object_id, transient, EcCurve::IdEccMontDh25519)
 }
 
 fn generate_p256(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
-    WriteEcKey::builder()
-        .transient(transient)
-        .key_type(P1KeyType::KeyPair)
-        .policy(POLICY)
-        .object_id(object_id)
-        .curve(EcCurve::NistP256)
-        .build()
+    generate_ec_key(object_id, transient, EcCurve::NistP256)
+}
+
+fn generate_p384(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
+    generate_ec_key(object_id, transient, EcCurve::NistP384)
+}
+
+#[cfg(feature = "large-ecc")]
+fn generate_p521(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
+    generate_ec_key(object_id, transient, EcCurve::NistP521)
+}
+
+fn generate_brainpool_p256r1(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
+    generate_ec_key(object_id, transient, EcCurve::Brainpool256)
+}
+
+fn generate_brainpool_p384r1(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
+    generate_ec_key(object_id, transient, EcCurve::Brainpool384)
+}
+
+#[cfg(feature = "large-ecc")]
+fn generate_brainpool_p512r1(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
+    generate_ec_key(object_id, transient, EcCurve::Brainpool512)
 }
 
 fn generate_rsa(object_id: ObjectId, size: u16) -> WriteRsaKey<'static> {
@@ -3002,19 +3672,33 @@ fn generate_rsa(object_id: ObjectId, size: u16) -> WriteRsaKey<'static> {
 
 /// Returns true on mechanisms that are handled by the S050 backend
 fn supported(mechanism: Mechanism) -> bool {
-    matches!(
-        mechanism,
-        Mechanism::Ed255
-            | Mechanism::X255
-            | Mechanism::P256
-            | Mechanism::P256Prehashed
-            | Mechanism::Rsa2048Raw
-            | Mechanism::Rsa3072Raw
-            | Mechanism::Rsa4096Raw
-            | Mechanism::Rsa2048Pkcs1v15
-            | Mechanism::Rsa3072Pkcs1v15
-            | Mechanism::Rsa4096Pkcs1v15
-    )
+    let supported = [
+        Mechanism::Ed255,
+        Mechanism::X255,
+        Mechanism::P256,
+        Mechanism::P256Prehashed,
+        Mechanism::P384,
+        Mechanism::P384Prehashed,
+        #[cfg(feature = "large-ecc")]
+        Mechanism::P521,
+        #[cfg(feature = "large-ecc")]
+        Mechanism::P521Prehashed,
+        Mechanism::BrainpoolP256R1,
+        Mechanism::BrainpoolP256R1Prehashed,
+        Mechanism::BrainpoolP384R1,
+        Mechanism::BrainpoolP384R1Prehashed,
+        #[cfg(feature = "large-ecc")]
+        Mechanism::BrainpoolP512R1,
+        #[cfg(feature = "large-ecc")]
+        Mechanism::BrainpoolP512R1Prehashed,
+        Mechanism::Rsa2048Raw,
+        Mechanism::Rsa3072Raw,
+        Mechanism::Rsa4096Raw,
+        Mechanism::Rsa2048Pkcs1v15,
+        Mechanism::Rsa3072Pkcs1v15,
+        Mechanism::Rsa4096Pkcs1v15,
+    ];
+    supported.contains(&mechanism)
 }
 
 impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {

@@ -48,6 +48,7 @@ salty = "0.3.0"
 p256-cortex-m4 = { version = "0.1.0-alpha.6", features = ["prehash", "sec1-signatures"] }
 admin-app = "0.1.0"
 bitflags = "2.5.0"
+der = "0.7.9"
 
 [dev-dependencies]
 admin-app = { version = "0.1.0", features = ["migration-tests"] }
@@ -57,7 +58,7 @@ serde_test = "1.0.176"
 littlefs2 = { git = "https://github.com/trussed-dev/littlefs2.git", rev = "960e57d9fc0d209308c8e15dc26252bbe1ff6ba8" }
 apdu-dispatch = { git = "https://github.com/trussed-dev/apdu-dispatch.git", rev = "915fc237103fcecc29d0f0b73391f19abf6576de" }
 ctaphid-dispatch = { git = "https://github.com/trussed-dev/ctaphid-dispatch.git", rev = "57cb3317878a8593847595319aa03ef17c29ec5b" }
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "667d60c019d485524a276f2a4dd07aaa66e71021" }
+trussed = { git = "https://github.com/nitrokey/trussed.git", rev = "540ad725ef44f0d6d3d2da7dd6ec0bacffaeb5bf" }
 trussed-auth = { git = "https://github.com/trussed-dev/trussed-auth.git", tag = "v0.3.0"}
 trussed-manage = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "manage-v0.1.0" }
 trussed-rsa-alloc = { git = "https://github.com/trussed-dev/trussed-rsa-backend.git", tag = "v0.2.1" }
@@ -73,3 +74,6 @@ log-info = []
 log-debug = []
 log-warn = []
 log-error = []
+
+# Support for large ECC keys (brainpool 512 and NIST P521), that do not have functional import/export
+large-ecc = []
