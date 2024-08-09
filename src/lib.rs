@@ -42,7 +42,7 @@ const BACKEND_DIR: &Path = path!("se050-bak");
 pub const GLOBAL_ATTEST_ID: ObjectId = ObjectId(hex!("F0000012"));
 
 /// The version to know wether it should be re-configured
-pub const SE050_CONFIGURE_VERSION: u32 = 2;
+pub const SE050_CONFIGURE_VERSION: u32 = 3;
 
 pub enum Se05xLocation {
     Persistent,
@@ -200,7 +200,7 @@ mod tests {
         // History of previous SE050_CONFIGURE_VERSION and the curves they used
         let curves_versions: &[(u32, &[_])] = &[
             (
-                2,
+                3,
                 &[
                     PRIME256V1_INITIALIZER,
                     SECP384R1_INITIALIZER,
@@ -208,6 +208,16 @@ mod tests {
                     BRAINPOOL_P256R1_INITIALIZER,
                     BRAINPOOL_P384R1_INITIALIZER,
                     BRAINPOOL_P512R1_INITIALIZER,
+                ],
+            ),
+            (
+                2,
+                &[
+                    PRIME256V1_INITIALIZER,
+                    SECP384R1_INITIALIZER,
+                    SECP521R1_INITIALIZER,
+                    BRAINPOOL_P256R1_INITIALIZER,
+                    BRAINPOOL_P384R1_INITIALIZER,
                 ],
             ),
             (1, &[PRIME256V1_INITIALIZER, SECP521R1_INITIALIZER]),
