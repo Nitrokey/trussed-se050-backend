@@ -444,7 +444,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
     /// Put a volatile key stored on the filesystem back into the SE050
     ///
-    /// This is used to perform one operation, the key must then be cleared again with [`reselect`](Se050Backend::reselect)
+    /// This is used to perform one operation, the key must then be cleared again with [`clear_volatile_key`](Se050Backend::clear_volatile_key)
     fn reimport_volatile_key(
         &mut self,
         key: KeyId,
