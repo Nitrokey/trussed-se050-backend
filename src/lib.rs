@@ -118,19 +118,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         }
     }
 
-    fn reselect(&mut self) -> Result<Atr, trussed::Error> {
-        match self.se.enable() {
-            Err(err) => {
-                error!("Reselecting failed: {:?}", err);
-                self.enabled = EnableState::Failed(err);
-                Err(trussed::Error::FunctionFailed)
-            }
-            Ok(atr) => {
-                self.enabled = EnableState::Enabled(atr);
-                Ok(atr)
-            }
-        }
-    }
     pub fn configure(&mut self) -> Result<(), trussed::Error> {
         self.enable()?;
         let buf = &mut [0; 1024];

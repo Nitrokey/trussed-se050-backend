@@ -56,11 +56,19 @@ struct VolatileKeyMaterial {
     exported_material: Bytes<1024>,
 }
 
+fn is_false(b: &bool) -> bool {
+    !b
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct VolatileKeyMaterialRef<'a> {
     object_id: VolatileObjectId,
     #[serde(serialize_with = "serde_bytes::serialize")]
     exported_material: &'a [u8],
+    /// Is this material only including the private key?
+    /// This is the case for imported EC keys other than P256
+    #[serde(skip_serializing_if = "is_false", default)]
+    is_only_private: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -199,14 +207,12 @@ fn prepare_rsa_pkcs1v15(message: &[u8], keysize: usize) -> Result<Bytes<512>, Er
 
 const SERIALIZED_P256_LEN: usize = 64;
 const SERIALIZED_P384_LEN: usize = 96;
-#[cfg(feature = "large-ecc")]
-const SERIALIZED_P521_LEN: usize = 128;
+const SERIALIZED_P521_LEN: usize = 132;
 const SERIALIZED_BRAINPOOL_P256R1_LEN: usize = 64;
 const SERIALIZED_BRAINPOOL_P384R1_LEN: usize = 96;
-#[cfg(feature = "large-ecc")]
 const SERIALIZED_BRAINPOOL_P512R1_LEN: usize = 128;
 
-const MAX_SERIALIZED_LEN: usize = 128;
+const MAX_SERIALIZED_LEN: usize = 132;
 
 #[allow(clippy::too_many_arguments)]
 impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
@@ -438,7 +444,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
     /// Put a volatile key stored on the filesystem back into the SE050
     ///
-    /// This is used to perform one operation, the key must then be cleared again with [`reselect`](Se050Backend::reselect)
+    /// This is used to perform one operation, the key must then be cleared again with [`clear_volatile_key`](Se050Backend::clear_volatile_key)
     fn reimport_volatile_key(
         &mut self,
         key: KeyId,
@@ -446,6 +452,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         se050_keystore: &mut impl Keystore,
         obj: ObjectId,
     ) -> Result<(), Error> {
+        let buf = &mut [0; 128];
         let material = se050_keystore.load_key(Secrecy::Secret, Some(kind), &key)?;
         let parsed: VolatileKeyMaterialRef = trussed::cbor_deserialize(&material.material)
             .map_err(|_err| {
@@ -454,13 +461,64 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             })?;
 
         assert_eq!(parsed.object_id.0, obj);
+        let res = self
+            .se
+            .run_command(
+                &CheckObjectExists {
+                    object_id: parsed.object_id.0,
+                },
+                buf,
+            )
+            .map_err(|_err| {
+                error!("Failed to check existence");
+                Error::FunctionFailed
+            })?;
+        if !res.result.is_success() {
+            let (curve, private_key) = match kind {
+                Kind::Ed255 => (EcCurve::IdEccEd25519, None),
+                Kind::X255 => (EcCurve::IdEccMontDh25519, None),
+                Kind::P256 => (EcCurve::NistP256, None),
+                Kind::P384 => (EcCurve::NistP384, Some([0; 48].as_slice())),
+                Kind::P521 => (EcCurve::NistP521, Some([0; 66].as_slice())),
+                Kind::BrainpoolP256R1 => (EcCurve::Brainpool256, Some([0; 32].as_slice())),
+                Kind::BrainpoolP384R1 => (EcCurve::Brainpool384, Some([0; 48].as_slice())),
+                Kind::BrainpoolP512R1 => (EcCurve::Brainpool512, Some([0; 64].as_slice())),
+                _ => unreachable!(),
+            };
+            let key_type = if parsed.is_only_private {
+                P1KeyType::Private
+            } else {
+                P1KeyType::KeyPair
+            };
+            debug!("is_onlyprivate: {}", parsed.is_only_private);
+            debug!("Key type: {key_type:?}");
+            self.se
+                .run_command(
+                    &WriteEcKey {
+                        transient: true,
+                        is_auth: false,
+                        key_type: Some(key_type),
+                        policy: Some(POLICY),
+                        max_attempts: None,
+                        object_id: parsed.object_id.0,
+                        curve: Some(curve),
+                        private_key: parsed.is_only_private.then_some(private_key).flatten(),
+                        public_key: None,
+                    },
+                    buf,
+                )
+                .map_err(|_err| {
+                    error!("Failed to re-create volatile key: {_err:?}");
+                    Error::FunctionFailed
+                })?;
+        }
         self.se
             .run_command(
                 &ImportObject::builder()
                     .object_id(obj)
                     .serialized_object(parsed.exported_material)
                     .build(),
-                &mut [0; 128],
+                buf,
             )
             .map_err(|_err| {
                 error!("Failed to re-import key:  {_err:?}");
@@ -581,7 +639,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
                 Ok(reply::DeriveKey { key: result })
             }
-            #[cfg(feature = "large-ecc")]
             KeyType::P521 => {
                 let material = self
                     .se
@@ -636,7 +693,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
                 Ok(reply::DeriveKey { key: result })
             }
-            #[cfg(feature = "large-ecc")]
             KeyType::BrainpoolP512R1 => {
                 let material = self
                     .se
@@ -719,6 +775,16 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         Ok(reply::DeriveKey { key })
     }
 
+    fn clear_volatile_key(&mut self, object_id: ObjectId) -> Result<(), Error> {
+        self.se
+            .run_command(&DeleteSecureObject { object_id }, &mut [0; 128])
+            .map_err(|_err| {
+                error!("Failed to delete volatile key: {_err:?}");
+                Error::FunctionFailed
+            })?;
+        Ok(())
+    }
+
     fn derive_volatile_key(
         &mut self,
         req: &request::DeriveKey,
@@ -732,11 +798,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             KeyType::X255 => Kind::X255,
             KeyType::P256 => Kind::P256,
             KeyType::P384 => Kind::P384,
-            #[cfg(feature = "large-ecc")]
             KeyType::P521 => Kind::P521,
             KeyType::BrainpoolP256R1 => Kind::BrainpoolP256R1,
             KeyType::BrainpoolP384R1 => Kind::BrainpoolP384R1,
-            #[cfg(feature = "large-ecc")]
             KeyType::BrainpoolP512R1 => Kind::BrainpoolP512R1,
             KeyType::Rsa2048 | KeyType::Rsa3072 | KeyType::Rsa4096 => {
                 unreachable!("Volatile rsa keys are derived in a separate function")
@@ -744,7 +808,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         };
         self.reimport_volatile_key(req.base_key, kind, se050_keystore, key)?;
         let res = self.derive_raw_key(req, key, core_keystore, ty)?;
-        self.reselect()?;
+        self.clear_volatile_key(key)?;
         Ok(res)
     }
 
@@ -960,11 +1024,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Mechanism::X255 => (Kind::X255, KeyType::X255),
             Mechanism::P256 => (Kind::P256, KeyType::P256),
             Mechanism::P384 => (Kind::P384, KeyType::P384),
-            #[cfg(feature = "large-ecc")]
             Mechanism::P521 => (Kind::P521, KeyType::P521),
             Mechanism::BrainpoolP256R1 => (Kind::BrainpoolP256R1, KeyType::BrainpoolP256R1),
             Mechanism::BrainpoolP384R1 => (Kind::BrainpoolP384R1, KeyType::BrainpoolP384R1),
-            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1 => (Kind::BrainpoolP512R1, KeyType::BrainpoolP512R1),
             Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => {
                 return self.generate_volatile_rsa_key(
@@ -1031,7 +1093,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     error!("Failed to generate volatile key: {_err:?}");
                     Error::FunctionFailed
                 })?,
-            #[cfg(feature = "large-ecc")]
             Mechanism::P521 => self
                 .se
                 .run_command(&generate_p521(object_id.0, true), buf)
@@ -1053,7 +1114,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     error!("Failed to generate volatile key: {_err:?}");
                     Error::FunctionFailed
                 })?,
-            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1 => self
                 .se
                 .run_command(&generate_brainpool_p512r1(object_id.0, true), buf)
@@ -1075,6 +1135,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let material: Bytes<1024> = trussed::cbor_serialize_bytes(&VolatileKeyMaterialRef {
             object_id,
             exported_material: exported,
+            is_only_private: false,
         })
         .map_err(|_err| {
             error!("Failed to serialize exported key: {_err:?}");
@@ -1082,8 +1143,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         })?;
         se050_keystore.overwrite_key(Location::Volatile, Secrecy::Secret, kind, &key, &material)?;
 
-        // Remove any data from the transient storage
-        self.reselect()?;
+        self.clear_volatile_key(object_id.0)?;
         debug!("Generated key: {key:?}");
         Ok(reply::GenerateKey { key })
     }
@@ -1130,7 +1190,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     Error::FunctionFailed
                 })?,
             Mechanism::P384Prehashed => return Err(Error::MechanismParamInvalid),
-            #[cfg(feature = "large-ecc")]
             Mechanism::P521 => self
                 .se
                 .run_command(&generate_p521(object_id.0, false), buf)
@@ -1138,7 +1197,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     error!("Failed to generate key: {_err:?}");
                     Error::FunctionFailed
                 })?,
-            #[cfg(feature = "large-ecc")]
             Mechanism::P521Prehashed => return Err(Error::MechanismParamInvalid),
             Mechanism::BrainpoolP256R1 => self
                 .se
@@ -1156,7 +1214,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     Error::FunctionFailed
                 })?,
             Mechanism::BrainpoolP384R1Prehashed => return Err(Error::MechanismParamInvalid),
-            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1 => self
                 .se
                 .run_command(&generate_brainpool_p512r1(object_id.0, false), buf)
@@ -1164,7 +1221,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     error!("Failed to generate key: {_err:?}");
                     Error::FunctionFailed
                 })?,
-            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1Prehashed => return Err(Error::MechanismParamInvalid),
             Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => self
                 .se
@@ -1199,11 +1255,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             // TODO First write curve somehow
             Mechanism::P256 => KeyType::P256,
             Mechanism::P384 => KeyType::P384,
-            #[cfg(feature = "large-ecc")]
             Mechanism::P521 => KeyType::P521,
             Mechanism::BrainpoolP256R1 => KeyType::BrainpoolP256R1,
             Mechanism::BrainpoolP384R1 => KeyType::BrainpoolP384R1,
-            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1 => KeyType::BrainpoolP512R1,
             Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => KeyType::Rsa2048,
             Mechanism::Rsa3072Raw | Mechanism::Rsa3072Pkcs1v15 => KeyType::Rsa3072,
@@ -1230,19 +1284,20 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let kind = match (req.mechanism, priv_parsed_ty) {
             (Mechanism::P256, KeyType::P256) => Kind::P256,
             (Mechanism::P384, KeyType::P384) => Kind::P384,
-            #[cfg(feature = "large-ecc")]
             (Mechanism::P521, KeyType::P521) => Kind::P521,
             (Mechanism::BrainpoolP256R1, KeyType::BrainpoolP256R1) => Kind::BrainpoolP256R1,
             (Mechanism::BrainpoolP384R1, KeyType::BrainpoolP384R1) => Kind::BrainpoolP384R1,
-            #[cfg(feature = "large-ecc")]
             (Mechanism::BrainpoolP512R1, KeyType::BrainpoolP512R1) => Kind::BrainpoolP512R1,
             (Mechanism::X255, KeyType::X255) => Kind::X255,
             _ => return Err(Error::WrongKeyKind),
         };
 
-        if let ParsedObjectId::VolatileKey(priv_volatile) = priv_parsed_key {
+        let volatile_key_id = if let ParsedObjectId::VolatileKey(priv_volatile) = priv_parsed_key {
             self.reimport_volatile_key(req.private_key, kind, se050_keystore, priv_volatile.0)?;
-        }
+            Some(priv_volatile.0)
+        } else {
+            None
+        };
 
         let (ParsedObjectId::VolatileKey(VolatileObjectId(priv_obj))
         | ParsedObjectId::PersistentKey(PersistentObjectId(priv_obj))) = priv_parsed_key
@@ -1294,9 +1349,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             shared_secret,
         )?;
 
-        if let ParsedObjectId::VolatileKey(_) = priv_parsed_key {
-            self.reselect()?;
+        if let Some(key_id) = volatile_key_id {
+            self.clear_volatile_key(key_id)?;
         }
+
         Ok(reply::Agree {
             shared_secret: key_id,
         })
@@ -1680,7 +1736,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             (Mechanism::P384Prehashed, KeyType::P384) => {
                 (Kind::P384, EcDsaSignatureAlgo::Sha384, 48)
             }
-            #[cfg(feature = "large-ecc")]
             (Mechanism::P521Prehashed, KeyType::P521) => {
                 (Kind::P521, EcDsaSignatureAlgo::Sha512, 66)
             }
@@ -1690,16 +1745,18 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             (Mechanism::BrainpoolP384R1Prehashed, KeyType::BrainpoolP384R1) => {
                 (Kind::BrainpoolP384R1, EcDsaSignatureAlgo::Sha384, 48)
             }
-            #[cfg(feature = "large-ecc")]
             (Mechanism::BrainpoolP512R1Prehashed, KeyType::BrainpoolP512R1) => {
                 (Kind::BrainpoolP512R1, EcDsaSignatureAlgo::Sha512, 64)
             }
             _ => return Err(Error::WrongKeyKind),
         };
 
-        if let ParsedObjectId::VolatileKey(key_volatile) = parsed_key {
+        let volatile_key_id = if let ParsedObjectId::VolatileKey(key_volatile) = parsed_key {
             self.reimport_volatile_key(req.key, kind, se050_keystore, key_volatile.0)?;
-        }
+            Some(key_volatile.0)
+        } else {
+            None
+        };
 
         let (ParsedObjectId::VolatileKey(VolatileObjectId(obj))
         | ParsedObjectId::PersistentKey(PersistentObjectId(obj))) = parsed_key
@@ -1731,8 +1788,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         assert!(signature.capacity() > 2 * field_byte_size);
         signature.extend(signature_der.to_bytes(field_byte_size));
 
-        if let ParsedObjectId::VolatileKey(_) = parsed_key {
-            self.reselect()?;
+        if let Some(key_id) = volatile_key_id {
+            self.clear_volatile_key(key_id)?;
         }
         Ok(reply::Sign { signature })
     }
@@ -1751,9 +1808,12 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             _ => return Err(Error::WrongKeyKind),
         };
 
-        if let ParsedObjectId::VolatileKey(key_volatile) = parsed_key {
+        let volatile_key_id = if let ParsedObjectId::VolatileKey(key_volatile) = parsed_key {
             self.reimport_volatile_key(req.key, kind, se050_keystore, key_volatile.0)?;
-        }
+            Some(key_volatile.0)
+        } else {
+            None
+        };
 
         let (ParsedObjectId::VolatileKey(VolatileObjectId(obj))
         | ParsedObjectId::PersistentKey(PersistentObjectId(obj))) = parsed_key
@@ -1788,8 +1848,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         signature[..32].reverse();
         signature[32..].reverse();
 
-        if let ParsedObjectId::VolatileKey(_) = parsed_key {
-            self.reselect()?;
+        if let Some(key_id) = volatile_key_id {
+            self.clear_volatile_key(key_id)?;
         }
         Ok(reply::Sign { signature })
     }
@@ -1826,7 +1886,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 core_keystore,
                 ns,
             ),
-            #[cfg(feature = "large-ecc")]
             Mechanism::P521Prehashed => self.verify_ecdsa_prehashed(
                 req,
                 Kind::P521,
@@ -1851,7 +1910,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 core_keystore,
                 ns,
             ),
-            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1Prehashed => self.verify_ecdsa_prehashed(
                 req,
                 Kind::BrainpoolP512R1,
@@ -2100,11 +2158,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         match req.mechanism {
             Mechanism::P256 => self.deserialize_p256_key(req, core_keystore),
             Mechanism::P384 => self.deserialize_p384_key(req, core_keystore),
-            #[cfg(feature = "large-ecc")]
             Mechanism::P521 => self.deserialize_p521_key(req, core_keystore),
             Mechanism::BrainpoolP256R1 => self.deserialize_brainpool_p256r1_key(req, core_keystore),
             Mechanism::BrainpoolP384R1 => self.deserialize_brainpool_p384r1_key(req, core_keystore),
-            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1 => self.deserialize_brainpool_p512r1_key(req, core_keystore),
             Mechanism::X255 => self.deserialize_x255_key(req, core_keystore),
             Mechanism::Ed255 => self.deserialize_ed255_key(req, core_keystore),
@@ -2168,7 +2224,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         self.deserialize_ec_key(req, core_keystore, Kind::P384, SERIALIZED_P384_LEN)
     }
 
-    #[cfg(feature = "large-ecc")]
     fn deserialize_p521_key(
         &mut self,
         req: &request::DeserializeKey,
@@ -2203,7 +2258,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         )
     }
 
-    #[cfg(feature = "large-ecc")]
     fn deserialize_brainpool_p512r1_key(
         &mut self,
         req: &request::DeserializeKey,
@@ -2297,11 +2351,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         match req.mechanism {
             Mechanism::P256 => self.serialize_p256_key(req, core_keystore),
             Mechanism::P384 => self.serialize_p384_key(req, core_keystore),
-            #[cfg(feature = "large-ecc")]
             Mechanism::P521 => self.serialize_p521_key(req, core_keystore),
             Mechanism::BrainpoolP256R1 => self.serialize_brainpool_p256r1_key(req, core_keystore),
             Mechanism::BrainpoolP384R1 => self.serialize_brainpool_p384r1_key(req, core_keystore),
-            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1 => self.serialize_brainpool_p512r1_key(req, core_keystore),
             Mechanism::X255 => self.serialize_x255_key(req, core_keystore),
             Mechanism::Ed255 => self.serialize_ed255_key(req, core_keystore),
@@ -2356,7 +2408,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     ) -> Result<reply::SerializeKey, Error> {
         self.serialize_ec_key(req, core_keystore, Kind::P384, SERIALIZED_P384_LEN)
     }
-    #[cfg(feature = "large-ecc")]
     fn serialize_p521_key(
         &mut self,
         req: &request::SerializeKey,
@@ -2388,7 +2439,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             SERIALIZED_BRAINPOOL_P384R1_LEN,
         )
     }
-    #[cfg(feature = "large-ecc")]
     fn serialize_brainpool_p512r1_key(
         &mut self,
         req: &request::SerializeKey,
@@ -2470,8 +2520,33 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             | ParsedObjectId::SaltValue(_) => return Err(Error::ObjectHandleInvalid),
 
             // We delete the exported data, which can be imported again if unwrapped.
-            ParsedObjectId::VolatileKey(_obj_id) => {
-                debug!("Clearing data for {:?}", _obj_id.0);
+            ParsedObjectId::VolatileKey(object_id) => {
+                debug!("Clearing data for {:?}", object_id.0);
+                let r = self
+                    .se
+                    .run_command(
+                        &CheckObjectExists {
+                            object_id: object_id.0,
+                        },
+                        &mut [0; 10],
+                    )
+                    .map_err(|_err| {
+                        error_now!("Failed to check still existence of volatile key: {_err:?}");
+                        Error::FunctionFailed
+                    })?;
+                if r.result.is_success() {
+                    self.se
+                        .run_command(
+                            &DeleteSecureObject {
+                                object_id: object_id.0,
+                            },
+                            &mut [0; 10],
+                        )
+                        .map_err(|_err| {
+                            error_now!("Failed to delete volatile key: {_err:?}");
+                            Error::FunctionFailed
+                        })?;
+                }
                 se050_keystore.delete_key(&req.key)
             }
             // We delete the key that protects the actual RSA private key data, which can be imported again if unwrapped.
@@ -2630,11 +2705,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Kind::X255 => KeyType::X255,
             Kind::P256 => KeyType::P256,
             Kind::P384 => KeyType::P384,
-            #[cfg(feature = "large-ecc")]
             Kind::P521 => KeyType::P521,
             Kind::BrainpoolP256R1 => KeyType::BrainpoolP256R1,
             Kind::BrainpoolP384R1 => KeyType::BrainpoolP384R1,
-            #[cfg(feature = "large-ecc")]
             Kind::BrainpoolP512R1 => KeyType::BrainpoolP512R1,
             _ => return Err(Error::FunctionFailed),
         };
@@ -2649,7 +2722,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 } else {
                     return Err(Error::ObjectHandleInvalid);
                 }
-                self.ensure_exists(mat.object_id.0, &mut [0; 128])?;
                 key_id_for_obj(mat.object_id.0, key_ty)
             }
             WrappedKeyType::VolatileRsa => {
@@ -3045,11 +3117,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             Mechanism::X255 => (Kind::X255, KeyType::X255),
             Mechanism::P256 => (Kind::P256, KeyType::P256),
             Mechanism::P384 => (Kind::P384, KeyType::P384),
-            #[cfg(feature = "large-ecc")]
             Mechanism::P521 => (Kind::P521, KeyType::P521),
             Mechanism::BrainpoolP256R1 => (Kind::BrainpoolP256R1, KeyType::BrainpoolP256R1),
             Mechanism::BrainpoolP384R1 => (Kind::BrainpoolP384R1, KeyType::BrainpoolP384R1),
-            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1 => (Kind::BrainpoolP512R1, KeyType::BrainpoolP512R1),
             Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => {
                 return self.unsafe_inject_volatile_rsa(
@@ -3087,6 +3157,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let buf = &mut [0; 1024];
         let id = VolatileObjectId::new(se050_keystore.rng(), ns);
 
+        let key_type;
         match req.mechanism {
             Mechanism::Ed255 => {
                 let private_data: [u8; 32] = (&**req.raw_key).try_into().map_err(|_| {
@@ -3097,10 +3168,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 let key = salty::signature::Keypair::from(&private_data);
                 let mut public_key = key.public.to_bytes();
                 public_key.reverse();
+                key_type = P1KeyType::KeyPair;
                 self.se
                     .run_command(
                         &WriteEcKey::builder()
-                            .key_type(P1KeyType::KeyPair)
+                            .key_type(key_type)
                             .private_key(&private_data)
                             .public_key(&public_key)
                             .transient(true)
@@ -3125,10 +3197,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 let mut public_key = key.public().to_bytes();
                 private_data.reverse();
                 public_key.reverse();
+                key_type = P1KeyType::KeyPair;
                 self.se
                     .run_command(
                         &WriteEcKey::builder()
-                            .key_type(P1KeyType::KeyPair)
+                            .key_type(key_type)
                             .private_key(&private_data)
                             .public_key(&public_key)
                             .transient(true)
@@ -3150,10 +3223,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                         Error::InvalidSerializedKey
                     })?;
                 let public_key = private.public_key().to_uncompressed_sec1_bytes();
+                key_type = P1KeyType::KeyPair;
                 self.se
                     .run_command(
                         &WriteEcKey::builder()
-                            .key_type(P1KeyType::KeyPair)
+                            .key_type(key_type)
                             .private_key(&req.raw_key)
                             .public_key(&public_key)
                             .policy(POLICY)
@@ -3170,10 +3244,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             }
             Mechanism::P384 => {
                 // TODO: Find a way to get the public key, so that `derive` works
+                key_type = P1KeyType::Private;
                 self.se
                     .run_command(
                         &WriteEcKey::builder()
-                            .key_type(P1KeyType::Private)
+                            .key_type(key_type)
                             .private_key(&req.raw_key)
                             .policy(POLICY)
                             .transient(true)
@@ -3187,13 +3262,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                         Error::FunctionFailed
                     })?;
             }
-            #[cfg(feature = "large-ecc")]
             Mechanism::P521 => {
                 // TODO: Find a way to get the public key, so that `derive` works
+                key_type = P1KeyType::Private;
                 self.se
                     .run_command(
                         &WriteEcKey::builder()
-                            .key_type(P1KeyType::Private)
+                            .key_type(key_type)
                             .private_key(&req.raw_key)
                             .policy(POLICY)
                             .transient(true)
@@ -3209,10 +3284,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             }
             Mechanism::BrainpoolP256R1 => {
                 // TODO: Find a way to get the public key, so that `derive` works
+                key_type = P1KeyType::Private;
                 self.se
                     .run_command(
                         &WriteEcKey::builder()
-                            .key_type(P1KeyType::Private)
+                            .key_type(key_type)
                             .private_key(&req.raw_key)
                             .policy(POLICY)
                             .transient(true)
@@ -3228,10 +3304,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             }
             Mechanism::BrainpoolP384R1 => {
                 // TODO: Find a way to get the public key, so that `derive` works
+                key_type = P1KeyType::Private;
                 self.se
                     .run_command(
                         &WriteEcKey::builder()
-                            .key_type(P1KeyType::Private)
+                            .key_type(key_type)
                             .private_key(&req.raw_key)
                             .policy(POLICY)
                             .transient(true)
@@ -3245,13 +3322,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                         Error::FunctionFailed
                     })?;
             }
-            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1 => {
                 // TODO: Find a way to get the public key, so that `derive` works
+                key_type = P1KeyType::Private;
                 self.se
                     .run_command(
                         &WriteEcKey::builder()
-                            .key_type(P1KeyType::Private)
+                            .key_type(key_type)
                             .private_key(&req.raw_key)
                             .policy(POLICY)
                             .transient(true)
@@ -3266,7 +3343,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                     })?;
             }
             _ => unreachable!(),
-        }
+        };
         let exported = self
             .se
             .run_command(&ExportObject::builder().object_id(id.0).build(), buf)
@@ -3279,6 +3356,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let material: Bytes<1024> = trussed::cbor_serialize_bytes(&VolatileKeyMaterialRef {
             object_id: id,
             exported_material: exported,
+            is_only_private: matches!(key_type, P1KeyType::Private),
         })
         .map_err(|_err| {
             debug!("Failed to encode exported key: {_err:?}");
@@ -3286,8 +3364,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         })?;
         se050_keystore.overwrite_key(Location::Volatile, Secrecy::Secret, kind, &key, &material)?;
 
-        // Remove any data from the transient storage
-        self.reselect()?;
+        self.clear_volatile_key(id.0)?;
+
         Ok(reply::UnsafeInjectKey { key })
     }
 
@@ -3445,7 +3523,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                         Error::FunctionFailed
                     })?;
             }
-            #[cfg(feature = "large-ecc")]
             Mechanism::P521Prehashed | Mechanism::P521 => {
                 // TODO: Check if public key is required
                 self.se
@@ -3500,7 +3577,6 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                         Error::FunctionFailed
                     })?;
             }
-            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1Prehashed | Mechanism::BrainpoolP512R1 => {
                 // TODO: Find a way to get the public key, so that `derive` works
                 self.se
@@ -3539,11 +3615,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             // TODO First write curve somehow
             Mechanism::P256 => KeyType::P256,
             Mechanism::P384 => KeyType::P384,
-            #[cfg(feature = "large-ecc")]
             Mechanism::P521 => KeyType::P521,
             Mechanism::BrainpoolP256R1 => KeyType::BrainpoolP256R1,
             Mechanism::BrainpoolP384R1 => KeyType::BrainpoolP384R1,
-            #[cfg(feature = "large-ecc")]
             Mechanism::BrainpoolP512R1 => KeyType::BrainpoolP512R1,
             Mechanism::Rsa2048Raw | Mechanism::Rsa2048Pkcs1v15 => KeyType::Rsa2048,
             Mechanism::Rsa3072Raw | Mechanism::Rsa3072Pkcs1v15 => KeyType::Rsa3072,
@@ -3643,7 +3717,6 @@ fn generate_p384(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
     generate_ec_key(object_id, transient, EcCurve::NistP384)
 }
 
-#[cfg(feature = "large-ecc")]
 fn generate_p521(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
     generate_ec_key(object_id, transient, EcCurve::NistP521)
 }
@@ -3656,7 +3729,6 @@ fn generate_brainpool_p384r1(object_id: ObjectId, transient: bool) -> WriteEcKey
     generate_ec_key(object_id, transient, EcCurve::Brainpool384)
 }
 
-#[cfg(feature = "large-ecc")]
 fn generate_brainpool_p512r1(object_id: ObjectId, transient: bool) -> WriteEcKey<'static> {
     generate_ec_key(object_id, transient, EcCurve::Brainpool512)
 }
@@ -3679,17 +3751,13 @@ fn supported(mechanism: Mechanism) -> bool {
         Mechanism::P256Prehashed,
         Mechanism::P384,
         Mechanism::P384Prehashed,
-        #[cfg(feature = "large-ecc")]
         Mechanism::P521,
-        #[cfg(feature = "large-ecc")]
         Mechanism::P521Prehashed,
         Mechanism::BrainpoolP256R1,
         Mechanism::BrainpoolP256R1Prehashed,
         Mechanism::BrainpoolP384R1,
         Mechanism::BrainpoolP384R1Prehashed,
-        #[cfg(feature = "large-ecc")]
         Mechanism::BrainpoolP512R1,
-        #[cfg(feature = "large-ecc")]
         Mechanism::BrainpoolP512R1Prehashed,
         Mechanism::Rsa2048Raw,
         Mechanism::Rsa3072Raw,
