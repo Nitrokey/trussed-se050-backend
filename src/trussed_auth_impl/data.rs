@@ -332,15 +332,13 @@ impl PinData {
         let session_id = res.session_id;
         let res = se050
             .authenticate_aes128_session(session_id, &pin_aes_key_value, rng)
-            .map_err(|err| {
-                error!("Failed to authenticate pin: {err:?}");
-                err
+            .inspect_err(|_err| {
+                error!("Failed to authenticate pin: {_err:?}");
             })?;
         se050
             .run_session_command(session_id, &CloseSession {}, buf)
-            .map_err(|err| {
-                error!("Failed to close session: {err:?}");
-                err
+            .inspect_err(|_err| {
+                error!("Failed to close session: {_err:?}");
             })?;
         debug!("Check succeeded with {res:?}");
         Ok(res)
@@ -450,9 +448,8 @@ impl PinData {
                 },
                 buf,
             )
-            .map_err(|_err| {
+            .inspect_err(|_err| {
                 debug!("Failed existence check: {_err:?}");
-                _err
             })?
             .result;
         if exists == Se05XResult::Success {
@@ -464,9 +461,8 @@ impl PinData {
                     },
                     buf,
                 )
-                .map_err(|_err| {
+                .inspect_err(|_err| {
                     debug!("Failed deletion: {_err:?}");
-                    _err
                 })?;
             count += 1;
         }
@@ -526,9 +522,8 @@ impl PinData {
                 },
                 buf,
             )
-            .map_err(|_err| {
+            .inspect_err(|_err| {
                 error!("Failed to delete auth: {_err:?}");
-                _err
             })?;
         debug!("Closing sess");
         se050.run_session_command(session_id, &CloseSession {}, buf)?;
@@ -540,9 +535,8 @@ impl PinData {
                 },
                 buf,
             )
-            .map_err(|err| {
-                error!("Failed to delete user id: {err:?}");
-                err
+            .inspect_err(|_err| {
+                error!("Failed to delete user id: {_err:?}");
             })?;
         count += 1;
         Ok(count)
@@ -590,9 +584,8 @@ impl PinData {
                     .build(),
                 buf,
             )
-            .map_err(|err| {
-                error!("Got err reading attempts: {err:?}");
-                err
+            .inspect_err(|_err| {
+                error!("Got err reading attempts: {_err:?}");
             })?
             .attributes;
         let max = attrs.max_authentication_attempts();
@@ -618,9 +611,8 @@ fn delete_from_path<Twi: I2CForT1, D: DelayUs<u32>>(
         debug!("Parsing name failed: {_err:?}");
         Error::DeserializationFailed
     })?;
-    let pin = PinData::load(id, fs, location).map_err(|_err| {
+    let pin = PinData::load(id, fs, location).inspect_err(|_err| {
         debug!("Failed  loading: {_err:?}");
-        _err
     })?;
     pin.delete(fs, location, se050)?;
     Ok(())

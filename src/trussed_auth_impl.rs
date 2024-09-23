@@ -319,9 +319,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 let keystore = &mut keystore(resources, core_ctx)?;
 
                 let pin_data =
-                    PinData::load(request.id, fs, self.metadata_location).map_err(|_err| {
+                    PinData::load(request.id, fs, self.metadata_location).inspect_err(|_err| {
                         debug!("Failed to get pin data: {_err:?}");
-                        _err
                     })?;
                 let app_key = self.get_app_key(client_id, global_fs, auth_ctx, keystore.rng())?;
                 let key = pin_data.check_and_get_key(
