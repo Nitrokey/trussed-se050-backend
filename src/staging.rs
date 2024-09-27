@@ -3,8 +3,8 @@ use hex_literal::hex;
 
 use littlefs2::path::PathBuf;
 use se05x::se05x::commands::{
-    CreateSession, DeleteAll, EcdhGenerateSharedSecret, ReadObject, VerifySessionUserId,
-    WriteEcKey, WriteUserId,
+    CreateSession, DeleteAll, DeleteSecureObject, EcdhGenerateSharedSecret, ReadObject,
+    VerifySessionUserId, WriteEcKey, WriteUserId,
 };
 use se05x::se05x::policies::{ObjectAccessRule, ObjectPolicyFlags, Policy, PolicySet};
 use se05x::se05x::{EcCurve, ObjectId, P1KeyType};
@@ -263,6 +263,17 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         kem_context[0..32].copy_from_slice(&*enc);
         kem_context[32..].copy_from_slice(&pkr.material);
         let shared_secret = hpke::extract_and_expand(dh, kem_context).into();
+        self.se
+            .run_command(
+                &DeleteSecureObject {
+                    object_id: *enc_object_id,
+                },
+                buf,
+            )
+            .map_err(|_err| {
+                error!("Failed to read generated key: {_err:?}",);
+                Error::FunctionFailed
+            })?;
         Ok((shared_secret, enc))
     }
 
