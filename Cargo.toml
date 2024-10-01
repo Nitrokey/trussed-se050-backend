@@ -28,6 +28,7 @@ trussed-auth = "0.3.0"
 trussed-manage = "0.1.0"
 trussed-se050-manage = "0.1.0"
 trussed-wrap-key-to-file = "0.1.0"
+trussed-hpke = "0.1.0"
 delog = "0.1.6"
 embedded-hal = "0.2.7"
 hkdf = { version = "0.12.3", default-features = false }
@@ -49,6 +50,7 @@ p256-cortex-m4 = { version = "0.1.0-alpha.6", features = ["prehash", "sec1-signa
 admin-app = "0.1.0"
 bitflags = "2.5.0"
 der = "0.7.9"
+chacha20poly1305 = { version = "0.10.1", default-features = false }
 
 [dev-dependencies]
 admin-app = { version = "0.1.0", features = ["migration-tests"] }
@@ -64,6 +66,7 @@ trussed-manage = { git = "https://github.com/trussed-dev/trussed-staging.git", t
 trussed-rsa-alloc = { git = "https://github.com/trussed-dev/trussed-rsa-backend.git", tag = "v0.2.1" }
 trussed-wrap-key-to-file = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "wrap-key-to-file-v0.1.0" }
 admin-app = { git = "https://github.com/Nitrokey/admin-app.git", tag = "v0.1.0-nitrokey.12" }
+trussed-hpke = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "f0babe53813e7882cfe5ce749ebe3a65fc143fd7" }
 
 trussed-se050-manage = { path = "extensions/se050-manage" }
 
