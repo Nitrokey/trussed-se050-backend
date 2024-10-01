@@ -210,7 +210,10 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         let mut out = Key::default();
         #[allow(clippy::expect_used)]
         kdf.expand(client_id.as_ref().as_bytes(), &mut *out)
-            .expect("Out data is always valid");
+            .map_err(|_err| {
+                error_now!("Out data is always valid: {_err:?}");
+            })
+            .unwrap();
         out
     }
 

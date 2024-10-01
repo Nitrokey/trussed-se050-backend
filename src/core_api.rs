@@ -1782,9 +1782,20 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             error!("Failed to parse DER signature: {_err:?}");
             Error::FunctionFailed
         })?;
-        let mut signature = Bytes::new();
-        assert!(signature.capacity() > 2 * field_byte_size);
-        signature.extend(signature_der.to_bytes(field_byte_size));
+
+        let signature = match req.format {
+            trussed::types::SignatureSerialization::Asn1Der => Bytes::from_slice(res.signature)
+                .map_err(|_err| {
+                    error_now!("Failed to write signature to response: {_err:?}");
+                })
+                .unwrap(),
+            trussed::types::SignatureSerialization::Raw => {
+                let mut signature = Bytes::new();
+                assert!(signature.capacity() > 2 * field_byte_size);
+                signature.extend(signature_der.to_bytes(field_byte_size));
+                signature
+            }
+        };
 
         if let Some(key_id) = volatile_key_id {
             self.clear_volatile_key(key_id)?;

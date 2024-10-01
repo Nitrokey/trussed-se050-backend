@@ -99,7 +99,10 @@ fn load_app_salt<S: Filestore>(fs: &mut S, location: Location) -> Result<Salt, E
 pub fn expand_app_key(salt: &Salt, application_key: &Key, info: &[u8]) -> Key {
     #[allow(clippy::expect_used)]
     let mut hmac = Hmac::<Sha256>::new_from_slice(&**application_key)
-        .expect("Slice will always be of acceptable size");
+        .map_err(|_err| {
+            error_now!("Slice will always be of acceptable size: {_err:?}");
+        })
+        .unwrap();
     hmac.update(&**salt);
     hmac.update(&(info.len() as u64).to_be_bytes());
     hmac.update(info);
@@ -118,7 +121,10 @@ fn pin_len(pin: &[u8]) -> u8 {
 pub fn expand_pin_key(salt: &Salt, application_key: &Key, id: PinId, pin: &[u8]) -> PinKey {
     #[allow(clippy::expect_used)]
     let mut hmac = Hmac::<Sha256>::new_from_slice(&**application_key)
-        .expect("Slice will always be of acceptable size");
+        .map_err(|_err| {
+            error_now!("Slice will always be of acceptable size: {_err:?}");
+        })
+        .unwrap();
     hmac.update(&[u8::from(id)]);
     hmac.update(&[pin_len(pin)]);
     hmac.update(pin);
