@@ -136,7 +136,7 @@ fn be_slice_to_bigint(data: &[u8]) -> Option<U4096> {
 /// and size is the size of the RSA key from the `Mechanism` param
 fn handle_rsa_import_format(data: &[u8], size: u16) -> Option<RsaImportElements> {
     let parsed = RsaImportFormat::deserialize(data)
-        .map_err(|_err| {
+        .inspect_err(|_err| {
             error!("Failed to parse rsa key");
         })
         .ok()?;
@@ -828,9 +828,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         };
         let data = se050_keystore
             .load_key(Secrecy::Secret, Some(kind), &req.base_key)
-            .map_err(|err| {
-                error!("Failed to load RSA key: {err:?}");
-                err
+            .inspect_err(|_err| {
+                error!("Failed to load RSA key: {_err:?}");
             })?;
         let data: VolatileRsaKey = cbor_deserialize(&data.material).or(Err(Error::CborError))?;
         let buf = &mut [0; 550];
@@ -1498,9 +1497,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         };
         let material = core_keystore
             .load_key(Secrecy::Public, Some(kind), &req.key)
-            .map_err(|err| {
-                error!("Failed to load key for decrypt: {err:?}");
-                err
+            .inspect_err(|_err| {
+                error!("Failed to load key for decrypt: {_err:?}");
             })?;
         let parsed = RsaPublicParts::deserialize(&material.material).map_err(|_err| {
             error!("Failed to parse volatile rsa key data: {_err:?}");
@@ -1947,9 +1945,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     ) -> Result<reply::Verify, Error> {
         let material = core_keystore
             .load_key(Secrecy::Public, Some(kind), &req.key)
-            .map_err(|err| {
-                debug!("Failed to load key for verify: {err:?}");
-                err
+            .inspect_err(|_err| {
+                debug!("Failed to load key for verify: {_err:?}");
             })?;
         let buf = &mut [0; 1024];
         let id = generate_object_id_ns(core_keystore.rng(), ns, ObjectKind::PublicTemporary);
@@ -2011,9 +2008,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     ) -> Result<reply::Verify, Error> {
         let material = core_keystore
             .load_key(Secrecy::Public, Some(kind), &req.key)
-            .map_err(|err| {
-                debug!("Failed to load key for verify: {err:?}");
-                err
+            .inspect_err(|_err| {
+                debug!("Failed to load key for verify: {_err:?}");
             })?;
         let buf = &mut [0; 1024];
         let id = generate_object_id_ns(core_keystore.rng(), ns, ObjectKind::PublicTemporary);
@@ -2079,9 +2075,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     ) -> Result<reply::Verify, Error> {
         let material = core_keystore
             .load_key(Secrecy::Public, Some(kind), &req.key)
-            .map_err(|err| {
-                debug!("Failed to load key for rsa sign: {err:?}");
-                err
+            .inspect_err(|_err| {
+                debug!("Failed to load key for rsa sign: {_err:?}");
             })?;
         let parsed = RsaPublicParts::deserialize(&material.material).map_err(|_err| {
             error!("Failed to parse public rsa key data: {_err:?}");
