@@ -30,9 +30,11 @@ use trussed::{
     api::NotBefore,
     platform::CryptoRng,
     service::{Filestore, RngCore},
-    types::{Bytes, Location, Path, PathBuf},
+    types::{Bytes, Location, Path},
 };
 use trussed_auth::{request, PinId, MAX_PIN_LENGTH};
+
+const APP_SALT_PATH: &Path = path!("application_salt");
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 enum PinSeId {
@@ -49,18 +51,12 @@ impl PinSeId {
     }
 }
 
-fn app_salt_path() -> PathBuf {
-    const SALT_PATH: &str = "application_salt";
-
-    PathBuf::from(SALT_PATH)
-}
-
 pub(crate) fn get_app_salt<S: Filestore, R: CryptoRng + RngCore>(
     fs: &mut S,
     rng: &mut R,
     location: Location,
 ) -> Result<Salt, Error> {
-    if !fs.exists(&app_salt_path(), location) {
+    if !fs.exists(APP_SALT_PATH, location) {
         create_app_salt(fs, rng, location)
     } else {
         load_app_salt(fs, location)
@@ -71,8 +67,8 @@ pub(crate) fn delete_app_salt<S: Filestore>(
     fs: &mut S,
     location: Location,
 ) -> Result<(), trussed::Error> {
-    if fs.exists(&app_salt_path(), location) {
-        fs.remove_file(&app_salt_path(), location)
+    if fs.exists(APP_SALT_PATH, location) {
+        fs.remove_file(APP_SALT_PATH, location)
     } else {
         Ok(())
     }
@@ -85,13 +81,13 @@ fn create_app_salt<S: Filestore, R: CryptoRng + RngCore>(
 ) -> Result<Salt, Error> {
     let mut salt = Salt::default();
     rng.fill_bytes(&mut *salt);
-    fs.write(&app_salt_path(), location, &*salt)
+    fs.write(APP_SALT_PATH, location, &*salt)
         .map_err(|_| Error::WriteFailed)?;
     Ok(salt)
 }
 
 fn load_app_salt<S: Filestore>(fs: &mut S, location: Location) -> Result<Salt, Error> {
-    fs.read(&app_salt_path(), location)
+    fs.read(APP_SALT_PATH, location)
         .map_err(|_| Error::ReadFailed)
         .and_then(|b: Bytes<SALT_LEN>| (**b).try_into().map_err(|_| Error::ReadFailed))
 }

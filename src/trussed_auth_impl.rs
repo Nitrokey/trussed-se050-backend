@@ -17,7 +17,7 @@ use trussed::{
     platform::CryptoRng,
     serde_extensions::ExtensionImpl,
     service::{Filestore, Keystore, RngCore, ServiceResources},
-    types::{CoreContext, Location, PathBuf},
+    types::{Location, PathBuf},
     Bytes,
 };
 use trussed_auth::MAX_HW_KEY_LEN;
@@ -107,11 +107,11 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         global_fs: &mut impl Filestore,
         rng: &mut R,
     ) -> Result<Salt, Error> {
-        let path = PathBuf::from("salt");
+        let path = path!("salt");
         global_fs
-            .read(&path, self.metadata_location)
+            .read(path, self.metadata_location)
             .or_else(|_| {
-                if global_fs.exists(&path, self.metadata_location) {
+                if global_fs.exists(path, self.metadata_location) {
                     return Err(Error::ReadFailed);
                 }
 
@@ -119,7 +119,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 salt.resize_to_capacity();
                 rng.fill_bytes(&mut salt);
                 global_fs
-                    .write(&path, self.metadata_location, &salt)
+                    .write(path, self.metadata_location, &salt)
                     .or(Err(Error::WriteFailed))
                     .and(Ok(salt))
             })
@@ -206,7 +206,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
         }
     }
 
-    fn expand(kdf: &Hkdf<Sha256>, client_id: &PathBuf) -> Key {
+    fn expand(kdf: &Hkdf<Sha256>, client_id: &Path) -> Key {
         let mut out = Key::default();
         #[allow(clippy::expect_used)]
         kdf.expand(client_id.as_ref().as_bytes(), &mut *out)
@@ -219,27 +219,27 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
     fn generate_app_key<R: CryptoRng + RngCore>(
         &mut self,
-        client_id: PathBuf,
+        client_id: &Path,
         global_fs: &mut impl Filestore,
         rng: &mut R,
     ) -> Result<Key, Error> {
         debug!("Generating app key");
         Ok(match &self.hw_key {
-            HardwareKey::Extracted(okm) => Self::expand(okm, &client_id),
+            HardwareKey::Extracted(okm) => Self::expand(okm, client_id),
             HardwareKey::Raw(hw_k) => {
                 let kdf = self.extract(global_fs, Some(hw_k.clone()), rng)?;
-                Self::expand(kdf, &client_id)
+                Self::expand(kdf, client_id)
             }
             HardwareKey::None => {
                 let kdf = self.extract(global_fs, None, rng)?;
-                Self::expand(kdf, &client_id)
+                Self::expand(kdf, client_id)
             }
         })
     }
 
     fn get_app_key<R: CryptoRng + RngCore>(
         &mut self,
-        client_id: PathBuf,
+        client_id: &Path,
         global_fs: &mut impl Filestore,
         ctx: &mut AuthContext,
         rng: &mut R,
@@ -274,52 +274,49 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
         debug!("Trussed Auth request: {request:?}");
         // FIXME: Have a real implementation from trussed
         let mut backend_path = core_ctx.path.clone();
-        backend_path.push(&PathBuf::from(BACKEND_DIR));
-        backend_path.push(&PathBuf::from(AUTH_DIR));
+        backend_path.push(BACKEND_DIR);
+        backend_path.push(AUTH_DIR);
 
         /// Coerce an FnMut into a FnOnce to ensure the stores are not created twice by mistake
         fn once<R, P>(
-            generator: impl FnOnce(&mut ServiceResources<P>, &mut CoreContext) -> R,
-        ) -> impl FnOnce(&mut ServiceResources<P>, &mut CoreContext) -> R {
+            generator: impl FnOnce(&mut ServiceResources<P>) -> R,
+        ) -> impl FnOnce(&mut ServiceResources<P>) -> R {
             generator
         }
 
-        let fs = once(|resources, _| match self.layout {
+        let fs = once(|resources| match self.layout {
             crate::FilesystemLayout::V0 => resources.filestore(backend_path),
             crate::FilesystemLayout::V1 => resources.raw_filestore(backend_path),
         });
-        let global_fs = once(|resources, _| match self.layout {
+        let global_fs = once(|resources| match self.layout {
             crate::FilesystemLayout::V0 => resources.filestore(PathBuf::from(BACKEND_DIR)),
             crate::FilesystemLayout::V1 => resources.raw_filestore(PathBuf::from(BACKEND_DIR)),
         });
-        let client_id = core_ctx.path.clone();
-        let keystore = once(|resources, core_ctx| resources.keystore(core_ctx.path.clone()));
+        let client_id = &core_ctx.path;
+        let keystore = once(|resources| resources.keystore(core_ctx.path.clone()));
 
         use trussed_auth::{reply, request, AuthRequest};
         match request {
             AuthRequest::HasPin(request) => {
-                let fs = &mut fs(resources, core_ctx);
+                let fs = &mut fs(resources);
                 let has_pin = fs.exists(&request.id.path(), self.metadata_location);
                 Ok(reply::HasPin { has_pin }.into())
             }
             AuthRequest::CheckPin(request) => {
-                let keystore = &mut keystore(resources, core_ctx)?;
-                let global_fs = &mut global_fs(resources, core_ctx);
+                let keystore = &mut keystore(resources)?;
+                let global_fs = &mut global_fs(resources);
 
-                let pin_data = PinData::load(
-                    request.id,
-                    &mut fs(resources, core_ctx),
-                    self.metadata_location,
-                )?;
+                let pin_data =
+                    PinData::load(request.id, &mut fs(resources), self.metadata_location)?;
                 let app_key = self.get_app_key(client_id, global_fs, auth_ctx, keystore.rng())?;
                 let success =
                     pin_data.check(&request.pin, &app_key, &mut self.se, keystore.rng())?;
                 Ok(reply::CheckPin { success }.into())
             }
             AuthRequest::GetPinKey(request) => {
-                let fs = &mut fs(resources, core_ctx);
-                let global_fs = &mut global_fs(resources, core_ctx);
-                let keystore = &mut keystore(resources, core_ctx)?;
+                let fs = &mut fs(resources);
+                let global_fs = &mut global_fs(resources);
+                let keystore = &mut keystore(resources)?;
 
                 let pin_data =
                     PinData::load(request.id, fs, self.metadata_location).inspect_err(|_err| {
@@ -347,9 +344,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 .into())
             }
             AuthRequest::GetApplicationKey(request) => {
-                let keystore = &mut keystore(resources, core_ctx)?;
-                let global_fs = &mut global_fs(resources, core_ctx);
-                let fs = &mut fs(resources, core_ctx);
+                let keystore = &mut keystore(resources)?;
+                let global_fs = &mut global_fs(resources);
+                let fs = &mut fs(resources);
 
                 let salt = get_app_salt(fs, keystore.rng(), self.metadata_location)?;
                 let key = expand_app_key(
@@ -366,9 +363,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 Ok(reply::GetApplicationKey { key: key_id }.into())
             }
             AuthRequest::SetPin(request) => {
-                let keystore = &mut keystore(resources, core_ctx)?;
-                let global_fs = &mut global_fs(resources, core_ctx);
-                let fs = &mut fs(resources, core_ctx);
+                let keystore = &mut keystore(resources)?;
+                let global_fs = &mut global_fs(resources);
+                let fs = &mut fs(resources);
 
                 if fs.exists(&request.id.path(), self.metadata_location) {
                     return Err(trussed::Error::FunctionFailed);
@@ -387,9 +384,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 Ok(reply::SetPin {}.into())
             }
             AuthRequest::SetPinWithKey(request) => {
-                let keystore = &mut keystore(resources, core_ctx)?;
-                let global_fs = &mut global_fs(resources, core_ctx);
-                let fs = &mut fs(resources, core_ctx);
+                let keystore = &mut keystore(resources)?;
+                let global_fs = &mut global_fs(resources);
+                let fs = &mut fs(resources);
 
                 let app_key = self.get_app_key(client_id, global_fs, auth_ctx, keystore.rng())?;
                 let key =
@@ -413,9 +410,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 Ok(reply::SetPinWithKey {}.into())
             }
             AuthRequest::ChangePin(request) => {
-                let global_fs = &mut global_fs(resources, core_ctx);
-                let fs = &mut fs(resources, core_ctx);
-                let keystore = &mut keystore(resources, core_ctx)?;
+                let global_fs = &mut global_fs(resources);
+                let fs = &mut fs(resources);
+                let keystore = &mut keystore(resources)?;
 
                 let mut pin_data = PinData::load(request.id, fs, self.metadata_location)?;
                 let app_key = self.get_app_key(client_id, global_fs, auth_ctx, keystore.rng())?;
@@ -430,7 +427,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 Ok(reply::ChangePin { success }.into())
             }
             AuthRequest::DeletePin(request) => {
-                let fs = &mut fs(resources, core_ctx);
+                let fs = &mut fs(resources);
 
                 let pin_data = PinData::load(request.id, fs, self.metadata_location)?;
                 pin_data.delete(fs, self.metadata_location, &mut self.se)?;
@@ -438,7 +435,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
             }
             AuthRequest::DeleteAllPins(request::DeleteAllPins) => {
                 use crate::core_api::ItemsToDelete;
-                let fs = &mut fs(resources, core_ctx);
+                let fs = &mut fs(resources);
                 // Satisfy the borrow checker
                 // The `once` trick makes it loose the information that drop is a noop :/
                 drop(global_fs);
@@ -450,8 +447,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 Ok(reply::DeleteAllPins.into())
             }
             AuthRequest::PinRetries(request) => {
-                let fs = &mut fs(resources, core_ctx);
-                let keystore = &mut keystore(resources, core_ctx)?;
+                let fs = &mut fs(resources);
+                let keystore = &mut keystore(resources)?;
 
                 debug!("Getting pin retries");
                 let pin_data = PinData::load(request.id, fs, self.metadata_location)?;
@@ -464,13 +461,13 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 .into())
             }
             AuthRequest::ResetAppKeys(_req) => {
-                let fs = &mut fs(resources, core_ctx);
+                let fs = &mut fs(resources);
 
                 delete_app_salt(fs, self.metadata_location)?;
                 Ok(reply::ResetAppKeys.into())
             }
             AuthRequest::ResetAuthData(_req) => {
-                let fs = &mut fs(resources, core_ctx);
+                let fs = &mut fs(resources);
 
                 delete_app_salt(fs, self.metadata_location)?;
                 delete_all_pins(fs, self.metadata_location, &mut self.se)?;

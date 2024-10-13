@@ -1,7 +1,6 @@
 use embedded_hal::blocking::delay::DelayUs;
 use hex_literal::hex;
 
-use littlefs2::path::PathBuf;
 use se05x::se05x::commands::{
     CreateSession, DeleteAll, DeleteSecureObject, EcdhGenerateSharedSecret, ReadObject,
     VerifySessionUserId, WriteEcKey, WriteUserId,
@@ -57,8 +56,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<WrapKeyToFileExtension>
 
         // FIXME: Have a real implementation from trussed
         let mut backend_path = core_ctx.path.clone();
-        backend_path.push(&PathBuf::from(BACKEND_DIR));
-        backend_path.push(&PathBuf::from(CORE_DIR));
+        backend_path.push(BACKEND_DIR);
+        backend_path.push(CORE_DIR);
 
         let core_keystore = &mut resources.keystore(core_ctx.path.clone())?;
         let se050_keystore = &mut resources.keystore(backend_path)?;
@@ -504,8 +503,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<HpkeExtension> for Se050Backe
 
         // FIXME: Have a real implementation from trussed
         let mut backend_path = core_ctx.path.clone();
-        backend_path.push(&PathBuf::from(BACKEND_DIR));
-        backend_path.push(&PathBuf::from(CORE_DIR));
+        backend_path.push(BACKEND_DIR);
+        backend_path.push(CORE_DIR);
         let filestore = &mut resources.filestore(core_ctx.path.clone());
 
         let core_keystore = &mut resources.keystore(core_ctx.path.clone())?;

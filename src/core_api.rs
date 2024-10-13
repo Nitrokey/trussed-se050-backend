@@ -8,7 +8,7 @@ use crypto_bigint::{
 };
 use embedded_hal::blocking::delay::DelayUs;
 use hex_literal::hex;
-use littlefs2::path::PathBuf;
+use littlefs2::{path, path::Path};
 use rand::{CryptoRng, RngCore};
 use se05x::{
     se05x::{
@@ -47,7 +47,7 @@ use crate::{
 mod ecdsa_der;
 
 pub(crate) const BUFFER_LEN: usize = 2048;
-pub(crate) const CORE_DIR: &str = "se050-core";
+pub(crate) const CORE_DIR: &Path = path!("se050-core");
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct VolatileKeyMaterial {
@@ -3806,8 +3806,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     ) -> Result<trussed::Reply, Error> {
         // FIXME: Have a real implementation from trussed
         let mut backend_path = core_ctx.path.clone();
-        backend_path.push(&PathBuf::from(BACKEND_DIR));
-        backend_path.push(&PathBuf::from(CORE_DIR));
+        backend_path.push(BACKEND_DIR);
+        backend_path.push(CORE_DIR);
 
         /// Coerce an FnMut into a FnOnce to ensure the stores are not created twice by mistake
         fn once<R, P>(
