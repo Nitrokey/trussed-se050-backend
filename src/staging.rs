@@ -1,7 +1,6 @@
 use embedded_hal::blocking::delay::DelayUs;
 use hex_literal::hex;
 
-use littlefs2::path::PathBuf;
 use se05x::se05x::commands::{CreateSession, DeleteAll, VerifySessionUserId, WriteUserId};
 use se05x::se05x::ObjectId;
 use se05x::t1::I2CForT1;
@@ -34,8 +33,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<WrapKeyToFileExtension>
     ) -> Result<WrapKeyToFileReply, Error> {
         // FIXME: Have a real implementation from trussed
         let mut backend_path = core_ctx.path.clone();
-        backend_path.push(&PathBuf::from(BACKEND_DIR));
-        backend_path.push(&PathBuf::from(CORE_DIR));
+        backend_path.push(BACKEND_DIR);
+        backend_path.push(CORE_DIR);
 
         let core_keystore = &mut resources.keystore(core_ctx.path.clone())?;
         let se050_keystore = &mut resources.keystore(backend_path)?;
