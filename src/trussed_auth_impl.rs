@@ -1,8 +1,7 @@
 use core::fmt;
 use embedded_hal::blocking::delay::DelayUs;
 use hkdf::Hkdf;
-use littlefs2::path;
-use littlefs2::path::Path;
+use littlefs2_core::{path, Path};
 use se05x::{
     se05x::{
         commands::{GetRandom, ReadObject, WriteBinary},
