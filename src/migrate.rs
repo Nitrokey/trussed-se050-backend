@@ -28,7 +28,7 @@ use crate::BACKEND_DIR;
 
 fn migrate_single(fs: &dyn DynFilesystem, path: &Path) -> Result<(), Error> {
     match fs.remove_dir_all(path) {
-        Err(Error::NoSuchEntry) => Ok(()),
+        Err(Error::NO_SUCH_ENTRY) => Ok(()),
         Err(err) => Err(err),
         Ok(()) => Ok(()),
     }
