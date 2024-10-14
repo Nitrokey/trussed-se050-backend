@@ -9,7 +9,7 @@ use super::{Error, Key, Salt, HASH_LEN, SALT_LEN};
 use embedded_hal::blocking::delay::DelayUs;
 use hex_literal::hex;
 use hmac::{Hmac, Mac};
-use littlefs2::path;
+use littlefs2_core::path;
 use rand::Rng;
 use se05x::{
     se05x::{

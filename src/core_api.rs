@@ -8,7 +8,7 @@ use crypto_bigint::{
 };
 use embedded_hal::blocking::delay::DelayUs;
 use hex_literal::hex;
-use littlefs2::{path, path::Path};
+use littlefs2_core::{path, Path};
 use rand::{CryptoRng, RngCore};
 use se05x::{
     se05x::{

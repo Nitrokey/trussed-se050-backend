@@ -1,5 +1,5 @@
 use core::ops::Deref;
-use littlefs2::path::Path;
+use littlefs2_core::Path;
 use rand::{CryptoRng, Rng, RngCore};
 use se05x::se05x::ObjectId;
 use serde::{Deserialize, Serialize};
