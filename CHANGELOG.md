@@ -2,7 +2,9 @@
 
 ## [Unreleased][]
 
--
+### Changed
+
+- Update `cbor-smol` dependency to v0.5.0
 
 [Unreleased]: https://github.com/trussed-dev/trussed-staging/compare/v0.3.0...HEAD
 

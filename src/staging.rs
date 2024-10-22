@@ -484,7 +484,9 @@ impl UnsealedKey {
     // encoding: |map(2) | text(1) | "d" | bytes (len as u16) | MAX_SERIALIZED_KEY_LENGTH | data
     // | text(1) | "k" | array(1 if core, 2 if se050) | discriminator | (discriminiator) if se050 |
     fn serialize(&self) -> Bytes<{ MAX_SERIALIZED_KEY_LENGTH + 11 + HPKE_OVERHEAD }> {
-        cbor_smol::cbor_serialize_bytes(&self).unwrap()
+        let mut data = Bytes::new();
+        cbor_smol::cbor_serialize_to(&self, &mut data).unwrap();
+        data
     }
     fn try_deserialize(data: &[u8]) -> Result<Self, Error> {
         cbor_smol::cbor_deserialize(data).map_err(|_| Error::CborError)
