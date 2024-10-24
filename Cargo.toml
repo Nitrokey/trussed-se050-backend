@@ -38,7 +38,6 @@ serde-byte-array = "0.1.2"
 iso7816 = "0.1.1"
 hmac = "0.12.1"
 rand = { version = "0.8.5", default-features = false }
-littlefs2 = "0.5.0"
 littlefs2-core = "0.1.0"
 cbor-smol = { version = "0.5.0", features = ["heapless-bytes-v0-3"] }
 serde_bytes = { version = "0.11.12", default-features = false }
@@ -66,7 +65,7 @@ trussed-auth = { git = "https://github.com/trussed-dev/trussed-auth.git", branch
 trussed-manage = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "manage-v0.1.0" }
 trussed-rsa-alloc = { git = "https://github.com/trussed-dev/trussed-rsa-backend.git", tag = "v0.2.1" }
 trussed-wrap-key-to-file = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "wrap-key-to-file-v0.1.0" }
-admin-app = { git = "https://github.com/Nitrokey/admin-app.git", branch = "littlefs2-core" }
+admin-app = { git = "https://github.com/Nitrokey/admin-app.git", branch = "littlefs2" }
 trussed-hpke = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "f0babe53813e7882cfe5ce749ebe3a65fc143fd7" }
 
 trussed-se050-manage = { path = "extensions/se050-manage" }
