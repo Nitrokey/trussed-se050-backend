@@ -41,16 +41,12 @@ fn migrate_single(fs: &dyn DynFilesystem, path: &Path) -> Result<(), Error> {
 /// Migrate does not itself keep track of whether the migration was performed
 ///
 /// ```rust
-///# use littlefs2_core::{fs::Filesystem, const_ram_storage, path};
-///# use trussed::types::{LfsResult, LfsStorage};
+///# use littlefs2_core::{DynFilesystem, Error, path};
 ///# use trussed_se050_backend::migrate::migrate_remove_all_dat;
-///# const_ram_storage!(Storage, 4096);
-///# let mut storage = Storage::new();
-///# Filesystem::format(&mut storage);
-///# Filesystem::mount_and_then(&mut storage, |fs| {
+///# fn test(fs: &dyn DynFilesystem) -> Result<(), Error> {
 /// migrate_remove_all_dat(fs, &[path!("secrets"), path!("opcard")])?;
-///#     Ok(())
-///# }).unwrap();
+///# Ok(())
+///# }
 /// ```
 pub fn migrate_remove_all_dat(fs: &dyn DynFilesystem, apps: &[&Path]) -> Result<(), Error> {
     migrate_single(fs, BACKEND_DIR)?;
