@@ -4,8 +4,7 @@ use core::ops::Range;
 
 use embedded_hal::blocking::delay::DelayUs;
 use hex_literal::hex;
-use littlefs2::path;
-use littlefs2::path::Path;
+use littlefs2_core::{path, Path};
 use namespacing::{Namespace, NamespaceValue};
 use se05x::{
     se05x::{
