@@ -353,6 +353,7 @@ enum_number! {
         BrainpoolP256R1 = 0x9,
         BrainpoolP384R1 = 0xA,
         BrainpoolP512R1 = 0xB,
+        Secp256k1 = 0xC,
     }
 }
 
@@ -367,6 +368,7 @@ impl KeyType {
             Self::BrainpoolP256R1 => Kind::BrainpoolP256R1,
             Self::BrainpoolP384R1 => Kind::BrainpoolP384R1,
             Self::BrainpoolP512R1 => Kind::BrainpoolP512R1,
+            Self::Secp256k1 => Kind::Secp256k1,
             Self::Rsa2048 => Kind::Rsa2048,
             Self::Rsa3072 => Kind::Rsa3072,
             Self::Rsa4096 => Kind::Rsa4096,
