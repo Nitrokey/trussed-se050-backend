@@ -25,13 +25,14 @@ use se05x::{
     t1::I2CForT1,
 };
 use serde::{Deserialize, Serialize};
+use serde_indexed::{DeserializeIndexed, SerializeIndexed};
 use trussed::{
     api::{reply, request, Request},
     backend::Backend,
     config::MAX_MESSAGE_LENGTH,
     key::{self, Kind, Secrecy},
     service::{Keystore, ServiceResources},
-    types::{CoreContext, KeyId, KeySerialization, Location, Mechanism, Message},
+    types::{CoreContext, KeyId, KeySerialization, Location, Mechanism, Message, ShortData},
     Bytes, Error,
 };
 use trussed_rsa_alloc::{RsaImportFormat, RsaPublicParts};
@@ -84,12 +85,35 @@ pub(crate) enum WrappedKeyType {
     VolatileRsa,
 }
 
+/// Corresponds to [`trussed::api::reply::Encrypt`][].
+#[derive(SerializeIndexed, DeserializeIndexed, Debug, Clone)]
+struct EncryptedData {
+    ciphertext: Message,
+    nonce: ShortData,
+    tag: ShortData,
+}
+
+impl From<reply::Encrypt> for EncryptedData {
+    fn from(reply: reply::Encrypt) -> Self {
+        let reply::Encrypt {
+            ciphertext,
+            nonce,
+            tag,
+        } = reply;
+        Self {
+            ciphertext,
+            nonce,
+            tag,
+        }
+    }
+}
+
 /// Can either be a raw wrapped key or a wrapped key
 ///
 /// If this is a raw wrapped key, `is_se050` is not included and therefore deserializes to `false`
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct WrappedKeyData {
-    encrypted_data: reply::Encrypt,
+    encrypted_data: EncryptedData,
     ty: WrappedKeyType,
 }
 
@@ -2629,7 +2653,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             <trussed::mechanisms::Chacha8Poly1305 as trussed::service::Encrypt>::encrypt(
                 core_keystore,
                 &encryption_request,
-            )?;
+            )?
+            .into();
 
         let mut wrapped_key: Bytes<1024> = postcard::to_vec(&WrappedKeyData { encrypted_data, ty })
             .map_err(|_| Error::CborError)?
@@ -2751,7 +2776,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
 
         let WrappedKeyData {
             encrypted_data:
-                reply::Encrypt {
+                EncryptedData {
                     ciphertext,
                     nonce,
                     tag,
