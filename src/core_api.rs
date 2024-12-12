@@ -34,6 +34,7 @@ use trussed::{
     types::{CoreContext, KeyId, KeySerialization, Location, Mechanism, Message},
     Bytes, Error,
 };
+use trussed_core::types::EncryptedData;
 use trussed_rsa_alloc::{RsaImportFormat, RsaPublicParts};
 
 use crate::{
@@ -89,7 +90,7 @@ pub(crate) enum WrappedKeyType {
 /// If this is a raw wrapped key, `is_se050` is not included and therefore deserializes to `false`
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct WrappedKeyData {
-    encrypted_data: reply::Encrypt,
+    encrypted_data: EncryptedData,
     ty: WrappedKeyType,
 }
 
@@ -2629,7 +2630,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             <trussed::mechanisms::Chacha8Poly1305 as trussed::service::Encrypt>::encrypt(
                 core_keystore,
                 &encryption_request,
-            )?;
+            )?
+            .into();
 
         let mut wrapped_key: Bytes<1024> = postcard::to_vec(&WrappedKeyData { encrypted_data, ty })
             .map_err(|_| Error::CborError)?
@@ -2749,24 +2751,14 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             return Err(Error::FunctionNotSupported);
         }
 
-        let WrappedKeyData {
-            encrypted_data:
-                reply::Encrypt {
-                    ciphertext,
-                    nonce,
-                    tag,
-                },
-            ty,
-        } = postcard::from_bytes(&req.wrapped_key[1..]).map_err(|_| Error::CborError)?;
+        let WrappedKeyData { encrypted_data, ty } =
+            postcard::from_bytes(&req.wrapped_key[1..]).map_err(|_| Error::CborError)?;
 
-        let decryption_request = request::Decrypt {
-            mechanism: Mechanism::Chacha8Poly1305,
-            key: req.wrapping_key,
-            message: ciphertext,
-            associated_data: req.associated_data.clone(),
-            nonce,
-            tag,
-        };
+        let decryption_request = encrypted_data.decrypt(
+            Mechanism::Chacha8Poly1305,
+            req.wrapping_key,
+            req.associated_data.clone(),
+        );
 
         let decryption_result =
             <trussed::mechanisms::Chacha8Poly1305 as trussed::service::Decrypt>::decrypt(
