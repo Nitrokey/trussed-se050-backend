@@ -1851,6 +1851,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
                 signature.extend(signature_der.to_bytes(field_byte_size));
                 signature
             }
+            _ => {
+                return Err(Error::InvalidSerializationFormat);
+            }
         };
 
         if let Some(key_id) = volatile_key_id {
