@@ -17,15 +17,15 @@ license.workspace = true
 
 [workspace.dependencies]
 serde = { version = "1.0.185", default-features = false, features = ["derive"] }
-trussed = { version = "0.1.0", features = ["serde-extensions"] }
+trussed-core = { version = "0.1.0-rc.1", features = ["serde-extensions"] }
 
 [dependencies]
 serde.workspace = true
-trussed.workspace = true
+trussed-core = { workspace = true, features = ["brainpoolp256r1", "brainpoolp384r1", "brainpoolp512r1", "chacha8-poly1305", "crypto-client", "ed255", "p256", "p384", "p521", "secp256k1", "x255"] }
 
 se05x = { version  = "0.1.5", features = ["serde", "builder"] }
+trussed = { version = "0.1.0", default-features = false, features = ["chacha8-poly1305", "crypto-client", "serde-extensions"] }
 trussed-auth = "0.3.0"
-trussed-core = "0.1"
 trussed-manage = "0.1.0"
 trussed-se050-manage = "0.1.0"
 trussed-wrap-key-to-file = "0.1.0"
@@ -48,7 +48,6 @@ crypto-bigint = { version = "0.5.3", default-features = false }
 p256 = { version = "0.13.2", default-features = false, features = ["ecdsa-core"] }
 salty = "0.3.0"
 p256-cortex-m4 = { version = "0.1.0-alpha.6", features = ["prehash", "sec1-signatures"] }
-admin-app = "0.1.0"
 bitflags = "2.5.0"
 der = "0.7.9"
 chacha20poly1305 = { version = "0.10.1", default-features = false }
@@ -58,15 +57,13 @@ admin-app = { version = "0.1.0", features = ["migration-tests"] }
 serde_test = "1.0.176"
 
 [patch.crates-io]
-ctaphid-dispatch = { git = "https://github.com/trussed-dev/ctaphid-dispatch.git", rev = "57cb3317878a8593847595319aa03ef17c29ec5b" }
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "eadd27cda0f457caae609e7fa972277e46695bd3" }
-trussed-core = { git = "https://github.com/trussed-dev/trussed.git", rev = "eadd27cda0f457caae609e7fa972277e46695bd3" }
-trussed-auth = { git = "https://github.com/trussed-dev/trussed-auth.git", rev = "c030b82ad3441f337af09afe3a69e8a6da5785ea" }
-trussed-manage = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "manage-v0.1.0" }
-trussed-rsa-alloc = { git = "https://github.com/trussed-dev/trussed-rsa-backend.git", tag = "v0.2.1" }
-trussed-wrap-key-to-file = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "wrap-key-to-file-v0.1.0" }
-admin-app = { git = "https://github.com/Nitrokey/admin-app.git", tag = "v0.1.0-nitrokey.18" }
-trussed-hpke = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "f0babe53813e7882cfe5ce749ebe3a65fc143fd7" }
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "6bba8fde36d05c0227769eb63345744e87d84b2b" }
+trussed-auth = { git = "https://github.com/trussed-dev/trussed-auth", rev = "fc53539536d7658c45a492585041742d8cdc45d0" }
+trussed-manage = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "9355f700831c1a278c334f76382fbf98d82aedcd" }
+trussed-rsa-alloc = { git = "https://github.com/trussed-dev/trussed-rsa-backend.git", rev = "743d9aaa3d8a17d7dbf492bd54dc18ab8fca3dc0" }
+trussed-wrap-key-to-file = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "9355f700831c1a278c334f76382fbf98d82aedcd" }
+admin-app = { git = "https://github.com/Nitrokey/admin-app.git", branch = "ctaphid-app" }
+trussed-hpke = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "9355f700831c1a278c334f76382fbf98d82aedcd" }
 
 trussed-se050-manage = { path = "extensions/se050-manage" }
 

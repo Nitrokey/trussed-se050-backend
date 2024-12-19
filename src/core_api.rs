@@ -42,7 +42,7 @@ use crate::{
         generate_object_id_ns, key_id_for_obj, parse_key_id, KeyType, NamespaceValue, ObjectKind,
         ParsedObjectId, PersistentObjectId, VolatileObjectId, VolatileRsaObjectId,
     },
-    object_in_range, Context, Se050Backend, BACKEND_DIR,
+    object_in_range, Context, Se050Backend, BACKEND_DIR, MECHANISMS,
 };
 
 mod ecdsa_der;
@@ -3904,31 +3904,7 @@ fn generate_rsa(object_id: ObjectId, size: u16) -> WriteRsaKey<'static> {
 
 /// Returns true on mechanisms that are handled by the S050 backend
 fn supported(mechanism: Mechanism) -> bool {
-    let supported = [
-        Mechanism::Ed255,
-        Mechanism::X255,
-        Mechanism::P256,
-        Mechanism::P256Prehashed,
-        Mechanism::P384,
-        Mechanism::P384Prehashed,
-        Mechanism::P521,
-        Mechanism::P521Prehashed,
-        Mechanism::BrainpoolP256R1,
-        Mechanism::BrainpoolP256R1Prehashed,
-        Mechanism::BrainpoolP384R1,
-        Mechanism::BrainpoolP384R1Prehashed,
-        Mechanism::BrainpoolP512R1,
-        Mechanism::BrainpoolP512R1Prehashed,
-        Mechanism::Secp256k1,
-        Mechanism::Secp256k1Prehashed,
-        Mechanism::Rsa2048Raw,
-        Mechanism::Rsa3072Raw,
-        Mechanism::Rsa4096Raw,
-        Mechanism::Rsa2048Pkcs1v15,
-        Mechanism::Rsa3072Pkcs1v15,
-        Mechanism::Rsa4096Pkcs1v15,
-    ];
-    supported.contains(&mechanism)
+    MECHANISMS.contains(&mechanism)
 }
 
 impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {

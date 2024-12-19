@@ -18,7 +18,10 @@ use se05x::{
     },
     t1::I2CForT1,
 };
-use trussed::{types::Location, Bytes};
+use trussed::{
+    types::{Location, Mechanism},
+    Bytes,
+};
 
 #[macro_use]
 extern crate delog;
@@ -42,6 +45,31 @@ pub const GLOBAL_ATTEST_ID: ObjectId = ObjectId(hex!("F0000012"));
 
 /// The version to know wether it should be re-configured
 pub const SE050_CONFIGURE_VERSION: u32 = 3;
+
+pub const MECHANISMS: &[Mechanism] = &[
+    Mechanism::Ed255,
+    Mechanism::X255,
+    Mechanism::P256,
+    Mechanism::P256Prehashed,
+    Mechanism::P384,
+    Mechanism::P384Prehashed,
+    Mechanism::P521,
+    Mechanism::P521Prehashed,
+    Mechanism::BrainpoolP256R1,
+    Mechanism::BrainpoolP256R1Prehashed,
+    Mechanism::BrainpoolP384R1,
+    Mechanism::BrainpoolP384R1Prehashed,
+    Mechanism::BrainpoolP512R1,
+    Mechanism::BrainpoolP512R1Prehashed,
+    Mechanism::Secp256k1,
+    Mechanism::Secp256k1Prehashed,
+    Mechanism::Rsa2048Raw,
+    Mechanism::Rsa3072Raw,
+    Mechanism::Rsa4096Raw,
+    Mechanism::Rsa2048Pkcs1v15,
+    Mechanism::Rsa3072Pkcs1v15,
+    Mechanism::Rsa4096Pkcs1v15,
+];
 
 pub enum Se05xLocation {
     Persistent,
