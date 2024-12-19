@@ -8,4 +8,4 @@ license.workspace = true
 
 [dependencies]
 serde.workspace = true
-trussed.workspace = true
+trussed-core = { version = "0.1", features = ["serde-extensions"] }
