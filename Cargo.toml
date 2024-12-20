@@ -17,7 +17,7 @@ license.workspace = true
 
 [workspace.dependencies]
 serde = { version = "1.0.185", default-features = false, features = ["derive"] }
-trussed = { version = "0.1.0", features = ["serde-extensions"] }
+trussed = { version = "0.1.0", default-features = false, features = ["chacha8-poly1305", "crypto-client", "serde-extensions"] }
 
 [dependencies]
 serde.workspace = true
@@ -25,7 +25,7 @@ trussed.workspace = true
 
 se05x = { version  = "0.1.5", features = ["serde", "builder"] }
 trussed-auth = "0.3.0"
-trussed-core = "0.1"
+trussed-core = { version = "0.1", features = ["brainpoolp256r1", "brainpoolp384r1", "brainpoolp512r1", "chacha8-poly1305", "crypto-client", "ed255", "p256", "p384", "p521", "x255"] }
 trussed-manage = "0.1.0"
 trussed-se050-manage = "0.1.0"
 trussed-wrap-key-to-file = "0.1.0"
@@ -61,11 +61,11 @@ serde_test = "1.0.176"
 ctaphid-dispatch = { git = "https://github.com/trussed-dev/ctaphid-dispatch.git", branch = "trussed-core" }
 trussed = { git = "https://github.com/trussed-dev/trussed.git", branch = "core-modules" }
 trussed-core = { git = "https://github.com/trussed-dev/trussed.git", branch = "core-modules" }
-trussed-auth = { git = "https://github.com/trussed-dev/trussed-auth.git", rev = "c030b82ad3441f337af09afe3a69e8a6da5785ea" }
+trussed-auth = { git = "https://github.com/trussed-dev/trussed-auth.git", branch = "trussed-core" }
 trussed-manage = { git = "https://github.com/trussed-dev/trussed-staging.git", branch = "trussed-core" }
-trussed-rsa-alloc = { git = "https://github.com/trussed-dev/trussed-rsa-backend.git", tag = "v0.2.1" }
+trussed-rsa-alloc = { git = "https://github.com/trussed-dev/trussed-rsa-backend.git", branch = "trussed-core" }
 trussed-wrap-key-to-file = { git = "https://github.com/trussed-dev/trussed-staging.git", branch = "trussed-core" }
-admin-app = { git = "https://github.com/Nitrokey/admin-app.git", tag = "v0.1.0-nitrokey.18" }
+admin-app = { git = "https://github.com/Nitrokey/admin-app.git", branch = "trussed-core" }
 trussed-hpke = { git = "https://github.com/trussed-dev/trussed-staging.git", branch = "trussed-core" }
 
 trussed-se050-manage = { path = "extensions/se050-manage" }
