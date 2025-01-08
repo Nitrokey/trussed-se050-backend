@@ -17,7 +17,7 @@ license.workspace = true
 
 [workspace.dependencies]
 serde = { version = "1.0.185", default-features = false, features = ["derive"] }
-trussed-core = { version = "0.1.0-rc.1", features = ["serde-extensions"] }
+trussed-core = { version = "0.1.0", features = ["serde-extensions"] }
 
 [dependencies]
 serde.workspace = true
@@ -27,7 +27,7 @@ se05x = { version  = "0.1.5", features = ["serde", "builder"] }
 trussed = { version = "0.1.0", default-features = false, features = ["chacha8-poly1305", "crypto-client", "serde-extensions"] }
 trussed-auth = "0.3.0"
 trussed-manage = "0.1.0"
-trussed-se050-manage = "0.1.0"
+trussed-se050-manage = "0.2.0"
 trussed-wrap-key-to-file = "0.1.0"
 trussed-hpke = "0.1.0"
 delog = "0.1.6"

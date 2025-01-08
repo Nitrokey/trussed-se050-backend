@@ -1,6 +1,7 @@
 [package]
 name = "trussed-se050-manage"
-version = "0.1.0"
+version = "0.2.0"
+description = "Trussed extension for managing a secure element"
 authors.workspace = true
 edition.workspace = true
 repository.workspace = true
