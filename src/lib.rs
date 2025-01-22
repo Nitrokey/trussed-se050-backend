@@ -28,7 +28,7 @@ extern crate delog;
 generate_macros!();
 
 mod trussed_auth_impl;
-use trussed_auth::MAX_HW_KEY_LEN;
+use trussed_auth_backend::MAX_HW_KEY_LEN;
 use trussed_auth_impl::{AuthContext, HardwareKey};
 
 mod staging;

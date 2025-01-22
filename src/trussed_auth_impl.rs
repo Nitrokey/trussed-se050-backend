@@ -19,7 +19,7 @@ use trussed::{
     types::{Location, PathBuf},
     Bytes,
 };
-use trussed_auth::MAX_HW_KEY_LEN;
+use trussed_auth_backend::MAX_HW_KEY_LEN;
 
 pub(crate) mod data;
 
