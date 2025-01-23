@@ -69,6 +69,7 @@ trussed-se050-manage = { path = "extensions/se050-manage" }
 log-all = []
 log-none = []
 log-info = []
+log-trace = []
 log-debug = []
 log-warn = []
 log-error = []
