@@ -393,7 +393,7 @@ pub(crate) fn parse_key_id(id: KeyId, ns: NamespaceValue) -> Option<(ParsedObjec
         return None;
     }
 
-    let ty = (((val & 0xFFFF << TY_OFFSET) >> TY_OFFSET) as u16)
+    let ty = (((val & (0xFFFF << TY_OFFSET)) >> TY_OFFSET) as u16)
         .try_into()
         .ok()?;
 
