@@ -30,7 +30,7 @@ use trussed::{
     backend::Backend,
     config::MAX_MESSAGE_LENGTH,
     key::{self, Kind, Secrecy},
-    service::{Keystore, ServiceResources},
+    service::{Keystore, MechanismImpl, ServiceResources},
     types::{CoreContext, KeyId, KeySerialization, Location, Mechanism, Message},
     Bytes, Error,
 };
@@ -2720,11 +2720,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             associated_data: req.associated_data.clone(),
             nonce: req.nonce.clone(),
         };
-        let encrypted_data =
-            <trussed::mechanisms::Chacha8Poly1305 as trussed::service::Encrypt>::encrypt(
-                core_keystore,
-                &encryption_request,
-            )?
+        let encrypted_data = Mechanism::Chacha8Poly1305
+            .encrypt(core_keystore, &encryption_request)?
             .into();
 
         let mut wrapped_key: Bytes<1024> = postcard::to_vec(&WrappedKeyData { encrypted_data, ty })
@@ -2855,11 +2852,8 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
             req.associated_data.clone(),
         );
 
-        let decryption_result =
-            <trussed::mechanisms::Chacha8Poly1305 as trussed::service::Decrypt>::decrypt(
-                core_keystore,
-                &decryption_request,
-            )?
+        let decryption_result = Mechanism::Chacha8Poly1305
+            .decrypt(core_keystore, &decryption_request)?
             .plaintext;
 
         let Some(serialized_key) = decryption_result else {
