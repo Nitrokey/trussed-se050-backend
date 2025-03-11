@@ -58,8 +58,10 @@ admin-app = { version = "0.1.0", features = ["migration-tests"] }
 serde_test = "1.0.176"
 
 [patch.crates-io]
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "7aea23b7e1897ca85e1f7598b0ada161c1423ca2" }
-trussed-auth-backend = { git = "https://github.com/trussed-dev/trussed-auth", tag = "v0.4.0" }
+# trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "7aea23b7e1897ca85e1f7598b0ada161c1423ca2" }
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "refs/pull/207/head" }
+# trussed-auth-backend = { git = "https://github.com/trussed-dev/trussed-auth", tag = "v0.4.0" }
+trussed-auth-backend = { git = "https://github.com/trussed-dev/trussed-auth", branch = "trussed" }
 trussed-rsa-alloc = { git = "https://github.com/trussed-dev/trussed-rsa-backend.git", rev = "743d9aaa3d8a17d7dbf492bd54dc18ab8fca3dc0" }
 admin-app = { git = "https://github.com/Nitrokey/admin-app.git", tag = "v0.1.0-nitrokey.20" }
 

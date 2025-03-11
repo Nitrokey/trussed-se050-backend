@@ -390,7 +390,9 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
                 let app_key = self.get_app_key(client_id, global_fs, auth_ctx, keystore.rng())?;
                 let key =
                     keystore.load_key(Secrecy::Secret, Some(Kind::Symmetric(32)), &request.key)?;
-                let key: Key = (&*key.material)
+                let key: Key = key
+                    .material
+                    .as_slice()
                     .try_into()
                     .map_err(|_| Error::DeserializationFailed)?;
 
