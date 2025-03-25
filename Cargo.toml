@@ -23,7 +23,7 @@ trussed-core = { version = "0.1.0", features = ["serde-extensions"] }
 serde.workspace = true
 trussed-core = { workspace = true, features = ["brainpoolp256r1", "brainpoolp384r1", "brainpoolp512r1", "chacha8-poly1305", "crypto-client", "ed255", "p256", "p384", "p521", "secp256k1", "x255"] }
 
-se05x = { version  = "0.1.5", features = ["serde", "builder"] }
+se05x = { version  = "0.2", features = ["serde", "builder"] }
 trussed = { version = "0.1.0", default-features = false, features = ["chacha8-poly1305", "crypto-client", "serde-extensions"] }
 trussed-auth = "0.4"
 trussed-auth-backend = "0.1"
@@ -32,7 +32,6 @@ trussed-se050-manage = "0.2.0"
 trussed-wrap-key-to-file = "0.2.0"
 trussed-hpke = "0.2.0"
 delog = "0.1.6"
-embedded-hal = "0.2.7"
 hkdf = { version = "0.12.3", default-features = false }
 sha2 = { version = "0.10.7", default-features = false }
 hex-literal = "0.4.1"

@@ -2,11 +2,11 @@
 
 use core::ops::Range;
 
-use embedded_hal::blocking::delay::DelayUs;
 use hex_literal::hex;
 use littlefs2_core::{path, Path};
 use namespacing::{Namespace, NamespaceValue};
 use se05x::{
+    embedded_hal::Delay,
     se05x::{
         commands::ReadEcCurveList,
         constants::{
@@ -106,7 +106,7 @@ pub struct Se050Backend<Twi, D> {
     layout: FilesystemLayout,
 }
 
-impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
+impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
     pub fn new(
         se: Se05X<Twi, D>,
         metadata_location: Location,

@@ -6,12 +6,12 @@ use crate::{
 
 use super::{Error, Key, Salt, HASH_LEN, SALT_LEN};
 
-use embedded_hal::blocking::delay::DelayUs;
 use hex_literal::hex;
 use hmac::{Hmac, Mac};
 use littlefs2_core::path;
 use rand::Rng;
 use se05x::{
+    embedded_hal::Delay,
     se05x::{
         commands::{
             CheckObjectExists, CloseSession, CreateSession, DeleteSecureObject, GetRandom,
@@ -201,7 +201,7 @@ impl PinData {
     }
 
     // Write the necessary objects to the SE050
-    pub fn create<Twi: I2CForT1, D: DelayUs<u32>>(
+    pub fn create<Twi: I2CForT1, D: Delay>(
         &self,
         fs: &mut impl Filestore,
         location: Location,
@@ -263,7 +263,7 @@ impl PinData {
 
     // Write the necessary objects to the SE050
     #[allow(clippy::too_many_arguments)]
-    pub fn create_with_key<Twi: I2CForT1, D: DelayUs<u32>, R: RngCore + CryptoRng>(
+    pub fn create_with_key<Twi: I2CForT1, D: Delay, R: RngCore + CryptoRng>(
         id: PinId,
         fs: &mut impl Filestore,
         location: Location,
@@ -315,7 +315,7 @@ impl PinData {
         Ok(this)
     }
 
-    pub fn check<Twi: I2CForT1, D: DelayUs<u32>, R: RngCore + CryptoRng>(
+    pub fn check<Twi: I2CForT1, D: Delay, R: RngCore + CryptoRng>(
         &self,
         value: &[u8],
         app_key: &Key,
@@ -346,7 +346,7 @@ impl PinData {
         Ok(res)
     }
 
-    pub fn check_and_get_key<Twi: I2CForT1, D: DelayUs<u32>, R: RngCore + CryptoRng>(
+    pub fn check_and_get_key<Twi: I2CForT1, D: Delay, R: RngCore + CryptoRng>(
         &self,
         value: &[u8],
         app_key: &Key,
@@ -389,7 +389,7 @@ impl PinData {
         res
     }
 
-    pub fn update<Twi: I2CForT1, D: DelayUs<u32>, R: RngCore + CryptoRng>(
+    pub fn update<Twi: I2CForT1, D: Delay, R: RngCore + CryptoRng>(
         &mut self,
         se050: &mut Se05X<Twi, D>,
         app_key: &Key,
@@ -436,7 +436,7 @@ impl PinData {
         Ok(Self { id, ..this })
     }
 
-    pub fn delete_with_derived<Twi: I2CForT1, D: DelayUs<u32>>(
+    pub fn delete_with_derived<Twi: I2CForT1, D: Delay>(
         se050: &mut Se05X<Twi, D>,
         se_id: PinObjectIdWithDerived,
     ) -> Result<u16, Error> {
@@ -544,7 +544,7 @@ impl PinData {
         Ok(count)
     }
 
-    pub fn delete<Twi: I2CForT1, D: DelayUs<u32>>(
+    pub fn delete<Twi: I2CForT1, D: Delay>(
         self,
         fs: &mut impl Filestore,
         location: Location,
@@ -570,7 +570,7 @@ impl PinData {
     }
 
     /// Returns (tried, max)
-    pub fn get_attempts<Twi: I2CForT1, D: DelayUs<u32>, R: RngCore + CryptoRng>(
+    pub fn get_attempts<Twi: I2CForT1, D: Delay, R: RngCore + CryptoRng>(
         self,
         se050: &mut Se05X<Twi, D>,
         rng: &mut R,
@@ -596,7 +596,7 @@ impl PinData {
     }
 }
 
-fn delete_from_path<Twi: I2CForT1, D: DelayUs<u32>>(
+fn delete_from_path<Twi: I2CForT1, D: Delay>(
     path: &Path,
     fs: &mut impl Filestore,
     location: Location,
@@ -620,7 +620,7 @@ fn delete_from_path<Twi: I2CForT1, D: DelayUs<u32>>(
     Ok(())
 }
 
-pub(crate) fn delete_all_pins<Twi: I2CForT1, D: DelayUs<u32>>(
+pub(crate) fn delete_all_pins<Twi: I2CForT1, D: Delay>(
     fs: &mut impl Filestore,
     location: Location,
     se050: &mut Se05X<Twi, D>,

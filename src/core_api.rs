@@ -6,11 +6,11 @@ use crypto_bigint::{
     subtle::{ConstantTimeEq, ConstantTimeGreater, CtOption},
     Checked, CtChoice, Encoding, U4096,
 };
-use embedded_hal::blocking::delay::DelayUs;
 use hex_literal::hex;
 use littlefs2_core::{path, Path};
 use rand::{CryptoRng, RngCore};
 use se05x::{
+    embedded_hal::Delay,
     se05x::{
         commands::{
             CheckObjectExists, CloseSession, CreateSession, DeleteSecureObject,
@@ -217,7 +217,7 @@ const SERIALIZED_SECP256K1_LEN: usize = 64;
 const MAX_SERIALIZED_LEN: usize = 132;
 
 #[allow(clippy::too_many_arguments)]
-impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
+impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
     fn random_bytes(&mut self, count: usize) -> Result<trussed::Reply, Error> {
         if count >= MAX_MESSAGE_LENGTH {
             return Err(Error::MechanismParamInvalid);
@@ -3907,7 +3907,7 @@ fn supported(mechanism: Mechanism) -> bool {
     MECHANISMS.contains(&mechanism)
 }
 
-impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
+impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
     fn core_request_internal<P: trussed::Platform>(
         &mut self,
         core_ctx: &mut CoreContext,
@@ -4018,7 +4018,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     }
 }
 
-impl<Twi: I2CForT1, D: DelayUs<u32>> Backend for Se050Backend<Twi, D> {
+impl<Twi: I2CForT1, D: Delay> Backend for Se050Backend<Twi, D> {
     type Context = Context;
 
     fn request<P: trussed::Platform>(

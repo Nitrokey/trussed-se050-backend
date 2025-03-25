@@ -1,6 +1,6 @@
-use embedded_hal::blocking::delay::DelayUs;
 use hex_literal::hex;
 
+use se05x::embedded_hal::Delay;
 use se05x::se05x::commands::{
     CreateSession, DeleteAll, DeleteSecureObject, EcdhGenerateSharedSecret, ReadObject,
     VerifySessionUserId, WriteEcKey, WriteUserId,
@@ -42,9 +42,7 @@ use self::hpke::{extract_and_expand, TAG_LEN};
 
 mod hpke;
 
-impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<WrapKeyToFileExtension>
-    for Se050Backend<Twi, D>
-{
+impl<Twi: I2CForT1, D: Delay> ExtensionImpl<WrapKeyToFileExtension> for Se050Backend<Twi, D> {
     fn extension_request<P: trussed::Platform>(
         &mut self,
         core_ctx: &mut CoreContext,
@@ -107,7 +105,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<WrapKeyToFileExtension>
     }
 }
 
-impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<ManageExtension> for Se050Backend<Twi, D> {
+impl<Twi: I2CForT1, D: Delay> ExtensionImpl<ManageExtension> for Se050Backend<Twi, D> {
     fn extension_request<P: trussed::Platform>(
         &mut self,
         _core_ctx: &mut CoreContext,
@@ -204,7 +202,7 @@ const POLICY: PolicySet<'static> = PolicySet(&[Policy {
     ),
 }]);
 
-impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
+impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
     fn hpke_encap(
         &mut self,
         pkr: KeyId,
@@ -493,7 +491,7 @@ impl UnsealedKey {
     }
 }
 
-impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<HpkeExtension> for Se050Backend<Twi, D> {
+impl<Twi: I2CForT1, D: Delay> ExtensionImpl<HpkeExtension> for Se050Backend<Twi, D> {
     fn extension_request<P: trussed::Platform>(
         &mut self,
         core_ctx: &mut CoreContext,
