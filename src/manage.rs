@@ -1,6 +1,5 @@
-use embedded_hal::blocking::delay::DelayUs;
-
 use se05x::{
+    embedded_hal::Delay,
     se05x::{
         commands::{GetFreeMemory, GetVersion},
         Memory,
@@ -20,7 +19,7 @@ use trussed_se050_manage::{
 
 use crate::Se050Backend;
 
-impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<Se050ManageExtension> for Se050Backend<Twi, D> {
+impl<Twi: I2CForT1, D: Delay> ExtensionImpl<Se050ManageExtension> for Se050Backend<Twi, D> {
     fn extension_request<P: trussed::Platform>(
         &mut self,
         _core_ctx: &mut CoreContext,

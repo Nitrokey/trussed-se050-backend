@@ -1,8 +1,8 @@
 use core::fmt;
-use embedded_hal::blocking::delay::DelayUs;
 use hkdf::Hkdf;
 use littlefs2_core::{path, Path};
 use se05x::{
+    embedded_hal::Delay,
     se05x::{
         commands::{GetRandom, ReadObject, WriteBinary},
         ObjectId,
@@ -100,7 +100,7 @@ pub struct AuthContext {
     application_key: Option<Key>,
 }
 
-impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
+impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
     fn get_global_salt<R: CryptoRng + RngCore>(
         &self,
         global_fs: &mut impl Filestore,
@@ -253,9 +253,7 @@ impl<Twi: I2CForT1, D: DelayUs<u32>> Se050Backend<Twi, D> {
     }
 }
 
-impl<Twi: I2CForT1, D: DelayUs<u32>> ExtensionImpl<trussed_auth::AuthExtension>
-    for Se050Backend<Twi, D>
-{
+impl<Twi: I2CForT1, D: Delay> ExtensionImpl<trussed_auth::AuthExtension> for Se050Backend<Twi, D> {
     fn extension_request<P: trussed::Platform>(
         &mut self,
         core_ctx: &mut trussed::types::CoreContext,
