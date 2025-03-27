@@ -115,23 +115,28 @@ impl<Twi: I2CForT1, D: Delay> ExtensionImpl<ManageExtension> for Se050Backend<Tw
     ) -> Result<<ManageExtension as trussed::serde_extensions::Extension>::Reply, Error> {
         match request {
             ManageRequest::FactoryResetDevice(trussed_manage::FactoryResetDeviceRequest) => {
+                debug_now!("Factory resetting se050");
                 let mut buf = [b'a'; 128];
                 let data = &hex!("31323334");
 
-                self.se
-                    .run_command(
-                        &WriteUserId {
-                            policy: None,
-                            max_attempts: None,
-                            object_id: ObjectId::FACTORY_RESET,
-                            data,
-                        },
-                        &mut buf,
-                    )
-                    .map_err(|_err| {
-                        debug!("Failed to write factory reset user id: {_err:?}");
-                        Error::FunctionFailed
-                    })?;
+                let res_write_factory_reset_object = self.se.run_command(
+                    &WriteUserId {
+                        policy: None,
+                        max_attempts: None,
+                        object_id: ObjectId::FACTORY_RESET,
+                        data,
+                    },
+                    &mut buf,
+                );
+                if let Err(err) = res_write_factory_reset_object {
+                    if !matches!(
+                        err,
+                        se05x::se05x::Error::Status(iso7816::Status::ConditionsOfUseNotSatisfied)
+                    ) {
+                        debug_now!("Failed write factory reset user id: {err:?}");
+                        return Err(Error::FunctionFailed);
+                    }
+                }
                 let session = self
                     .se
                     .run_command(
@@ -141,7 +146,7 @@ impl<Twi: I2CForT1, D: Delay> ExtensionImpl<ManageExtension> for Se050Backend<Tw
                         &mut buf,
                     )
                     .map_err(|_err| {
-                        debug!("Failed to create reset session: {_err:?}");
+                        debug_now!("Failed to create reset session: {_err:?}");
                         Error::FunctionFailed
                     })?;
 
@@ -152,14 +157,14 @@ impl<Twi: I2CForT1, D: Delay> ExtensionImpl<ManageExtension> for Se050Backend<Tw
                         &mut buf,
                     )
                     .map_err(|_err| {
-                        debug!("Failed to verify reset session: {_err:?}");
+                        debug_now!("Failed to verify reset session: {_err:?}");
                         Error::FunctionFailed
                     })?;
 
                 self.se
                     .run_session_command(session.session_id, &DeleteAll {}, &mut buf)
                     .map_err(|_err| {
-                        debug!("Failed to factory reset: {_err:?}");
+                        debug_now!("Failed to factory reset: {_err:?}");
                         Error::FunctionFailed
                     })?;
                 self.configure()?;
