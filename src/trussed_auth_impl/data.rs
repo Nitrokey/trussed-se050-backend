@@ -337,11 +337,13 @@ impl PinData {
             .inspect_err(|_err| {
                 error!("Failed to authenticate pin: {_err:?}");
             })?;
-        se050
-            .run_session_command(session_id, &CloseSession {}, buf)
-            .inspect_err(|_err| {
-                error!("Failed to close session: {_err:?}");
-            })?;
+        if res {
+            se050
+                .run_session_command(session_id, &CloseSession {}, buf)
+                .inspect_err(|_err| {
+                    error!("Failed to close session: {_err:?}");
+                })?;
+        }
         debug!("Check succeeded with {res:?}");
         Ok(res)
     }
@@ -382,7 +384,8 @@ impl PinData {
                         .map_err(|_| Error::DeserializationFailed)?,
                 ))
             }
-            Ok(false) => Ok(None),
+            // Failed session do not need to be closed
+            Ok(false) => return Ok(None),
             Err(err) => Err(err.into()),
         };
         se050.run_session_command(session_id, &CloseSession {}, buf)?;
