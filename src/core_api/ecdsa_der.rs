@@ -30,10 +30,9 @@ impl<'a> DerSignature<'a> {
         let r_begin = field_bytes_size.saturating_sub(self.r.as_bytes().len());
         let s_begin = field_bytes_size.saturating_sub(self.s.as_bytes().len());
 
-        iter::repeat(0)
-            .take(r_begin)
+        iter::repeat_n(0, r_begin)
             .chain(self.r.as_bytes().iter().cloned())
-            .chain(iter::repeat(0).take(s_begin))
+            .chain(iter::repeat_n(0, s_begin))
             .chain(self.s.as_bytes().iter().cloned())
     }
 }
