@@ -4,10 +4,12 @@
 
 ### Changed
 
+- Do not close sessions when authentication fails ([#54][])
 - Update `cbor-smol` dependency to v0.5.0
 - Update `trussed-se050-manage` dependency to v0.2.0
 
 [Unreleased]: https://github.com/trussed-dev/trussed-staging/compare/v0.3.0...HEAD
+[#54]: https://github.com/Nitrokey/trussed-se050-backend/pull/54#pullrequestreview-2873970779
 
 ## [v0.3.6][] (2024-10-17)
 
