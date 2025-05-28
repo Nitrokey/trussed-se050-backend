@@ -386,7 +386,10 @@ impl PinData {
             }
             // Failed session do not need to be closed
             Ok(false) => return Ok(None),
-            Err(err) => Err(err.into()),
+            Err(err) => {
+                error!("Failed to authenticate: {err:?}");
+                return Err(err.into());
+            }
         };
         se050.run_session_command(session_id, &CloseSession {}, buf)?;
         res
