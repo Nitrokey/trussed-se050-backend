@@ -264,6 +264,7 @@ impl<Twi: I2CForT1, D: Delay> ExtensionImpl<trussed_auth::AuthExtension> for Se0
         <trussed_auth::AuthExtension as trussed::serde_extensions::Extension>::Reply,
         trussed::Error,
     > {
+        self.configure()?;
         let backend_ctx = backend_ctx.with_namespace(&self.ns, &core_ctx.path);
         let auth_ctx = backend_ctx.auth;
         let ns = backend_ctx.ns;
