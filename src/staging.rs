@@ -50,8 +50,6 @@ impl<Twi: I2CForT1, D: Delay> ExtensionImpl<WrapKeyToFileExtension> for Se050Bac
         request: &WrapKeyToFileRequest,
         resources: &mut ServiceResources<P>,
     ) -> Result<WrapKeyToFileReply, Error> {
-        self.configure()?;
-
         // FIXME: Have a real implementation from trussed
         let mut backend_path = core_ctx.path.clone();
         backend_path.push(BACKEND_DIR);
@@ -504,8 +502,6 @@ impl<Twi: I2CForT1, D: Delay> ExtensionImpl<HpkeExtension> for Se050Backend<Twi,
         request: &<HpkeExtension as trussed::serde_extensions::Extension>::Request,
         resources: &mut ServiceResources<P>,
     ) -> Result<<HpkeExtension as trussed::serde_extensions::Extension>::Reply, Error> {
-        self.configure()?;
-
         // FIXME: Have a real implementation from trussed
         let mut backend_path = core_ctx.path.clone();
         backend_path.push(BACKEND_DIR);
