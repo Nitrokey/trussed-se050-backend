@@ -9,7 +9,7 @@ license = "Apache-2.0 OR MIT"
 
 [package]
 name = "trussed-se050-backend"
-version = "0.4.0"
+version = "0.5.0"
 authors.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -42,7 +42,7 @@ rand = { version = "0.8.5", default-features = false }
 littlefs2-core = "0.1.0"
 cbor-smol = { version = "0.5.0", features = ["heapless-bytes-v0-3"] }
 serde_bytes = { version = "0.11.12", default-features = false }
-trussed-rsa-alloc = "0.2.1"
+trussed-rsa-alloc = "0.3"
 postcard = "0.7.3"
 crypto-bigint = { version = "0.5.3", default-features = false }
 p256 = { version = "0.13.2", default-features = false, features = ["ecdsa-core"] }
@@ -59,7 +59,7 @@ serde_test = "1.0.176"
 [patch.crates-io]
 trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "7aea23b7e1897ca85e1f7598b0ada161c1423ca2" }
 trussed-auth-backend = { git = "https://github.com/trussed-dev/trussed-auth", tag = "v0.4.0" }
-trussed-rsa-alloc = { git = "https://github.com/trussed-dev/trussed-rsa-backend.git", rev = "743d9aaa3d8a17d7dbf492bd54dc18ab8fca3dc0" }
+trussed-rsa-alloc = { git = "https://github.com/trussed-dev/trussed-rsa-backend.git", tag = "v0.3.0" }
 admin-app = { git = "https://github.com/Nitrokey/admin-app.git", tag = "v0.1.0-nitrokey.20" }
 
 trussed-se050-manage = { path = "extensions/se050-manage" }
