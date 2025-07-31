@@ -4,11 +4,11 @@
 
 [Unreleased]: https://github.com/trussed-dev/trussed-staging/compare/v0.4.0...HEAD
 
--
+- Update `trussed-rsa-alloc` dependency to v0.3.
 
 ## [v0.4.0][] (2025-07-31)
 
-[v0.4.9]: https://github.com/Nitrokey/trussed-se050-backend/compare/v0.3.6...v0.4.0
+[v0.4.0]: https://github.com/Nitrokey/trussed-se050-backend/compare/v0.3.6...v0.4.0
 
 ### Changed
 
