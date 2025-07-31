@@ -2,14 +2,32 @@
 
 ## [Unreleased][]
 
+[Unreleased]: https://github.com/trussed-dev/trussed-staging/compare/v0.4.0...HEAD
+
+-
+
+## [v0.4.0][] (2025-07-31)
+
+[v0.4.9]: https://github.com/Nitrokey/trussed-se050-backend/compare/v0.3.6...v0.4.0
+
 ### Changed
 
 - Do not close sessions when authentication fails ([#54][])
+- Make factory reset power-loss resilient ([#53][])
+- Remove duplicate configure ([#55][])
 - Update `cbor-smol` dependency to v0.5.0
+- Update `littlefs2` dependency to v0.5.0
+- Update `se05x` dependency to v0.2.0
 - Update `trussed-se050-manage` dependency to v0.2.0
 
-[Unreleased]: https://github.com/trussed-dev/trussed-staging/compare/v0.3.0...HEAD
-[#54]: https://github.com/Nitrokey/trussed-se050-backend/pull/54#pullrequestreview-2873970779
+### Added
+
+- Add support for secp256k1 ([#41][])
+
+[#41]: https://github.com/Nitrokey/trussed-se050-backend/pull/41
+[#53]: https://github.com/Nitrokey/trussed-se050-backend/pull/53
+[#54]: https://github.com/Nitrokey/trussed-se050-backend/pull/54
+[#55]: https://github.com/Nitrokey/trussed-se050-backend/pull/55
 
 ## [v0.3.6][] (2024-10-17)
 
