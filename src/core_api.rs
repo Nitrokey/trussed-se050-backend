@@ -35,7 +35,7 @@ use trussed::{
     Bytes, Error,
 };
 use trussed_core::types::EncryptedData;
-use trussed_rsa_alloc::{RsaImportFormat, RsaPublicParts};
+use trussed_rsa_types::{RsaImportFormat, RsaPublicParts};
 
 use crate::{
     namespacing::{
