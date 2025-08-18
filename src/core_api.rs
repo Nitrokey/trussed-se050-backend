@@ -135,7 +135,7 @@ fn be_slice_to_bigint(data: &[u8]) -> Option<U4096> {
 ///
 /// `data` is a expected to be a [`RsaImportFormat`][] serialized value,
 /// and size is the size of the RSA key from the `Mechanism` param
-fn handle_rsa_import_format(data: &[u8], size: u16) -> Option<RsaImportElements> {
+fn handle_rsa_import_format(data: &[u8], size: u16) -> Option<RsaImportElements<'_>> {
     let parsed = RsaImportFormat::deserialize(data)
         .map_err(|_err| {
             error!("Failed to parse rsa key");
