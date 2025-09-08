@@ -89,7 +89,7 @@ fn create_app_salt<S: Filestore, R: CryptoRng + RngCore>(
 fn load_app_salt<S: Filestore>(fs: &mut S, location: Location) -> Result<Salt, Error> {
     fs.read(APP_SALT_PATH, location)
         .map_err(|_| Error::ReadFailed)
-        .and_then(|b: Bytes<SALT_LEN>| (**b).try_into().map_err(|_| Error::ReadFailed))
+        .and_then(|b: Bytes<SALT_LEN>| (*b).try_into().map_err(|_| Error::ReadFailed))
 }
 
 pub fn expand_app_key(salt: &Salt, application_key: &Key, info: &[u8]) -> Key {

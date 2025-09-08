@@ -6,6 +6,7 @@ use crypto_bigint::{
     subtle::{ConstantTimeEq, ConstantTimeGreater, CtOption},
     Checked, CtChoice, Encoding, U4096,
 };
+use heapless::Vec;
 use hex_literal::hex;
 use littlefs2_core::{path, Path};
 use rand::{CryptoRng, RngCore};
@@ -46,6 +47,16 @@ use crate::{
 };
 
 mod ecdsa_der;
+
+pub(crate) fn postcard_serialize_bytes<T: serde::Serialize, const N: usize>(
+    object: &T,
+) -> postcard::Result<Vec<u8, N>> {
+    let mut vec = Vec::new();
+    vec.resize(N, 0u8).unwrap();
+    let serialized = postcard::to_slice(object, &mut vec)?.len();
+    vec.resize(serialized, 0).unwrap();
+    Ok(vec)
+}
 
 pub(crate) const BUFFER_LEN: usize = 2048;
 pub(crate) const CORE_DIR: &Path = path!("se050-core");
@@ -234,7 +245,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
             return Err(Error::FunctionFailed);
         }
         Ok(reply::RandomBytes {
-            bytes: Message::from_slice(res.data).unwrap(),
+            bytes: Message::try_from(res.data).unwrap(),
         }
         .into())
     }
@@ -1456,7 +1467,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
             })?;
 
         Ok(reply::Decrypt {
-            plaintext: Some(Bytes::from_slice(plaintext).map_err(|_err| Error::FunctionFailed)?),
+            plaintext: Some(Bytes::try_from(plaintext).map_err(|_err| Error::FunctionFailed)?),
         })
     }
 
@@ -1482,9 +1493,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
                 Error::FunctionFailed
             })?;
         Ok(reply::Decrypt {
-            plaintext: Some(
-                Bytes::from_slice(res.plaintext).map_err(|_err| Error::FunctionFailed)?,
-            ),
+            plaintext: Some(Bytes::try_from(res.plaintext).map_err(|_err| Error::FunctionFailed)?),
         })
     }
 
@@ -1593,7 +1602,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
 
         let ret = reply::Encrypt {
             // ciphertext can't be larger than buffer anyway.
-            ciphertext: Bytes::from_slice(res.ciphertext).unwrap(),
+            ciphertext: Bytes::try_from(res.ciphertext).unwrap(),
             nonce: Default::default(),
             tag: Default::default(),
         };
@@ -1700,7 +1709,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
             })?;
 
         Ok(reply::Sign {
-            signature: Bytes::from_slice(signature).map_err(|_err| Error::FunctionFailed)?,
+            signature: Bytes::try_from(signature).map_err(|_err| Error::FunctionFailed)?,
         })
     }
 
@@ -1725,7 +1734,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
                 Error::FunctionFailed
             })?;
         Ok(reply::Sign {
-            signature: Bytes::from_slice(res.plaintext).map_err(|_err| Error::FunctionFailed)?,
+            signature: Bytes::try_from(res.plaintext).map_err(|_err| Error::FunctionFailed)?,
         })
     }
 
@@ -1833,7 +1842,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
         })?;
 
         let signature = match req.format {
-            trussed::types::SignatureSerialization::Asn1Der => Bytes::from_slice(res.signature)
+            trussed::types::SignatureSerialization::Asn1Der => Bytes::try_from(res.signature)
                 .map_err(|_err| {
                     error_now!("Failed to write signature to response: {_err:?}");
                 })
@@ -1841,7 +1850,9 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
             trussed::types::SignatureSerialization::Raw => {
                 let mut signature = Bytes::new();
                 assert!(signature.capacity() > 2 * field_byte_size);
-                signature.extend(signature_der.to_bytes(field_byte_size));
+                signature
+                    .try_extend(signature_der.to_bytes(field_byte_size))
+                    .unwrap();
                 signature
             }
             _ => {
@@ -2100,7 +2111,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
                 Error::FunctionFailed
             })?;
 
-        let Ok(mut signature): Result<[u8; 64], _> = (&**req.signature).try_into() else {
+        let Ok(mut signature): Result<[u8; 64], _> = (&*req.signature).try_into() else {
             error!(
                 "Got Ed25519 signature that is not 64 bytes: {}",
                 req.signature.len()
@@ -2362,7 +2373,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
             return Err(Error::FunctionFailed);
         }
 
-        let Ok(mut buf): Result<[u8; 32], _> = (&**req.serialized_key).try_into() else {
+        let Ok(mut buf): Result<[u8; 32], _> = (&*req.serialized_key).try_into() else {
             debug!(
                 "Unsupported x255 public key length: {}",
                 req.serialized_key.len()
@@ -2388,7 +2399,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
             return Err(Error::FunctionFailed);
         }
 
-        let Ok(mut buf): Result<[u8; 32], _> = (&**req.serialized_key).try_into() else {
+        let Ok(mut buf): Result<[u8; 32], _> = (&*req.serialized_key).try_into() else {
             debug!(
                 "Unsupported ed255 public key length: {}",
                 req.serialized_key.len()
@@ -2709,7 +2720,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
         let encryption_request = request::Encrypt {
             mechanism: Mechanism::Chacha8Poly1305,
             key: req.wrapping_key,
-            message: Bytes::from_slice(&key.serialize()).unwrap(),
+            message: Bytes::try_from(&*key.serialize()).unwrap(),
             associated_data: req.associated_data.clone(),
             nonce: req.nonce.clone(),
         };
@@ -2717,9 +2728,10 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
             .encrypt(core_keystore, &encryption_request)?
             .into();
 
-        let mut wrapped_key: Bytes<1024> = postcard::to_vec(&WrappedKeyData { encrypted_data, ty })
-            .map_err(|_| Error::CborError)?
-            .into();
+        let mut wrapped_key: Bytes<1024> =
+            postcard_serialize_bytes(&WrappedKeyData { encrypted_data, ty })
+                .map_err(|_| Error::CborError)?
+                .into();
 
         // We add a 0 to distinguish between a key wrapped by core and a key wrapped by the se050 backend.
         // Keys wrapped by core start with 0 if and only the ciphertext is empty, but this cannot happen given how the key data is serialized to form the plaintext.
@@ -3262,7 +3274,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
         let key_type;
         match req.mechanism {
             Mechanism::Ed255 => {
-                let private_data: [u8; 32] = (&**req.raw_key).try_into().map_err(|_| {
+                let private_data: [u8; 32] = (&*req.raw_key).try_into().map_err(|_| {
                     debug!("Raw key is too large");
                     Error::InvalidSerializedKey
                 })?;
@@ -3290,7 +3302,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
                     })?;
             }
             Mechanism::X255 => {
-                let mut private_data: [u8; 32] = (&**req.raw_key).try_into().map_err(|_| {
+                let mut private_data: [u8; 32] = (&*req.raw_key).try_into().map_err(|_| {
                     debug!("Raw key is too large");
                     Error::InvalidSerializedKey
                 })?;
@@ -3557,7 +3569,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
         let id = PersistentObjectId::new(rng, ns);
         match req.mechanism {
             Mechanism::Ed255 => {
-                let private_data: [u8; 32] = (&**req.raw_key).try_into().map_err(|_| {
+                let private_data: [u8; 32] = (&*req.raw_key).try_into().map_err(|_| {
                     debug!("Raw key is too large");
                     Error::InvalidSerializedKey
                 })?;
@@ -3583,7 +3595,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
                     })?;
             }
             Mechanism::X255 => {
-                let mut private_data: [u8; 32] = (&**req.raw_key).try_into().map_err(|_| {
+                let mut private_data: [u8; 32] = (&*req.raw_key).try_into().map_err(|_| {
                     debug!("Raw key is too large");
                     Error::InvalidSerializedKey
                 })?;

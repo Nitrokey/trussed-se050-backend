@@ -68,7 +68,7 @@ impl<Twi: I2CForT1, D: Delay> ExtensionImpl<WrapKeyToFileExtension> for Se050Bac
                         mechanism: req.mechanism,
                         wrapping_key: req.wrapping_key,
                         key: req.key,
-                        associated_data: Bytes::from_slice(&req.associated_data)
+                        associated_data: Bytes::try_from(&*req.associated_data)
                             .map_err(|_| Error::FunctionFailed)?,
                         // TODO: add nonce support?
                         nonce: None,
@@ -556,7 +556,7 @@ impl<Twi: I2CForT1, D: Delay> ExtensionImpl<HpkeExtension> for Se050Backend<Twi,
                     .map_err(|_| Error::ImplementationError)?;
                 pt.extend_from_slice(&tag)
                     .map_err(|_| Error::ImplementationError)?;
-                let data = Bytes::from_slice(&pt).map_err(|_| {
+                let data = Bytes::try_from(&*pt).map_err(|_| {
                     error_now!("Wrapped key is too large. Use WrappKeyToFile instead");
                     Error::InternalError
                 })?;
