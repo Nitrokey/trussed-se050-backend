@@ -2,7 +2,7 @@
 
 ## [Unreleased][]
 
--
+- Update `trussed-core` to v0.2
 
 [Unreleased]: https://github.com/Nitrokey/trussed-se050-backend/compare/se050-manage-v0.2.0...HEAD
 

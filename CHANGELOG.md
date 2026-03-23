@@ -5,6 +5,10 @@
 [Unreleased]: https://github.com/trussed-dev/trussed-se050-backend/compare/v0.5.0...HEAD
 
 - Replace `trussed-rsa-alloc` dependency with `trussed-rsa-types`.
+- Update dependencies:
+  - `heapless` v0.9
+  - `se05x` v0.3.1
+  - `trussed-core` v0.2
 
 ## [v0.5.0][] (2025-07-31)
 

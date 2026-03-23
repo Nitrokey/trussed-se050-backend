@@ -187,13 +187,12 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
         rng: &mut R,
     ) -> Result<&Hkdf<Sha256>, Error> {
         debug!("Extracting key");
-        let ikm: &[u8] = ikm.as_deref().map(|i| &*i).unwrap_or(&[]);
+        let ikm: &[u8] = ikm.as_deref().unwrap_or(&[]);
         let salt = self.get_global_salt(global_fs, rng)?;
         debug!("Getting se050 salt");
         let se050_salt = self.get_se050_salt()?;
 
-        let mut real_ikm: Bytes<{ SALT_LEN + MAX_HW_KEY_LEN }> =
-            Bytes::try_from(&*se050_salt).unwrap();
+        let mut real_ikm: Bytes<{ SALT_LEN + MAX_HW_KEY_LEN }> = Bytes::from(&*se050_salt);
         real_ikm.extend_from_slice(ikm).unwrap();
 
         let kdf = Hkdf::new(Some(&*salt), &real_ikm);

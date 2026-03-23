@@ -664,21 +664,21 @@ mod tests {
     #[test]
     fn unsealed_key_size() {
         let unsealed_key = UnsealedKey {
-            data: Bytes::from_slice(&[0; MAX_SERIALIZED_KEY_LENGTH]).unwrap(),
+            data: Bytes::from(&[0; MAX_SERIALIZED_KEY_LENGTH]),
             kind: KeyKind::Core,
         };
 
         unsealed_key.serialize();
 
         let unsealed_key = UnsealedKey {
-            data: Bytes::from_slice(&[0; MAX_SERIALIZED_KEY_LENGTH]).unwrap(),
+            data: Bytes::from(&[0; MAX_SERIALIZED_KEY_LENGTH]),
             kind: KeyKind::Se050(WrappedKeyType::Volatile),
         };
 
         unsealed_key.serialize();
 
         let unsealed_key = UnsealedKey {
-            data: Bytes::from_slice(&[0; MAX_SERIALIZED_KEY_LENGTH]).unwrap(),
+            data: Bytes::from(&[0; MAX_SERIALIZED_KEY_LENGTH]),
             kind: KeyKind::Se050(WrappedKeyType::VolatileRsa),
         };
 
