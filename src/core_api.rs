@@ -50,13 +50,6 @@ mod ecdsa_der;
 pub(crate) const BUFFER_LEN: usize = 2048;
 pub(crate) const CORE_DIR: &Path = path!("se050-core");
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct VolatileKeyMaterial {
-    object_id: VolatileObjectId,
-    persistent_metadata: KeyId,
-    exported_material: Bytes<1024>,
-}
-
 fn is_false(b: &bool) -> bool {
     !b
 }
