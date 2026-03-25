@@ -9,7 +9,7 @@ license = "Apache-2.0 OR MIT"
 
 [package]
 name = "trussed-se050-backend"
-version = "0.5.0"
+version = "0.6.0"
 authors.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -17,23 +17,7 @@ license.workspace = true
 
 [workspace.dependencies]
 serde = { version = "1.0.185", default-features = false, features = ["derive"] }
-trussed-core = { version = "0.2", features = [
-  "brainpoolp256r1",
-  "brainpoolp384r1",
-  "brainpoolp512r1",
-  "chacha8-poly1305",
-  "crypto-client",
-  "ed255",
-  "p256",
-  "p384",
-  "p521",
-  "secp256k1",
-  "x255",
-  "serde-extensions",
-  "rsa2048",
-  "rsa3072",
-  "rsa4096",
-] }
+trussed-core = { version = "0.2", features = ["serde-extensions"] }
 
 [dependencies]
 serde.workspace = true
@@ -44,7 +28,7 @@ trussed = { version = "0.1.0", default-features = false, features = ["chacha8-po
 trussed-auth = "0.5"
 trussed-auth-backend = "0.1"
 trussed-manage = "0.3.0"
-trussed-se050-manage = "0.2.0"
+trussed-se050-manage = "0.3.0"
 trussed-wrap-key-to-file = "0.3.0"
 trussed-hpke = "0.3.0"
 delog = "0.1.6"

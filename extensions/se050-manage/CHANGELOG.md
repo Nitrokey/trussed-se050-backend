@@ -2,9 +2,15 @@
 
 ## [Unreleased][]
 
-- Update `trussed-core` to v0.2
+[Unreleased]: https://github.com/Nitrokey/trussed-se050-backend/compare/se050-manage-v0.3.0...HEAD
 
-[Unreleased]: https://github.com/Nitrokey/trussed-se050-backend/compare/se050-manage-v0.2.0...HEAD
+-
+
+## [0.3.0][] - 2026-03-25
+
+[0.3.0]: https://github.com/Nitrokey/trussed-se050-backend/releases/tag/se050-manage-v0.3.0
+
+- Update `trussed-core` to v0.2
 
 ## [0.2.0][] - 2025-01-08
 
