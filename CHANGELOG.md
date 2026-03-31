@@ -4,7 +4,7 @@
 
 [Unreleased]: https://github.com/trussed-dev/trussed-se050-backend/compare/v0.6.0...HEAD
 
--
+- Update `se05x` to v0.4.
 
 ## [v0.6.0][] (2026-03-25)
 
