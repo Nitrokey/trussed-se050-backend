@@ -9,7 +9,7 @@ license = "Apache-2.0 OR MIT"
 
 [package]
 name = "trussed-se050-backend"
-version = "0.6.0"
+version = "0.7.0"
 authors.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -59,7 +59,7 @@ admin-app = { version = "0.1.0", features = ["migration-tests"] }
 serde_test = "1.0.176"
 
 [patch.crates-io]
-admin-app = { git = "https://github.com/Nitrokey/admin-app.git", branch = "heapless-09" }
+admin-app = { git = "https://github.com/Nitrokey/admin-app.git", tag = "v0.1.0-nitrokey.21" }
 trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "0f8df68be879acdde1f8cf428c11e5d29692a47b" }
 trussed-auth-backend = { git = "https://github.com/trussed-dev/trussed-auth", tag = "backend-v0.1.0" }
 trussed-rsa-alloc = { git = "https://github.com/trussed-dev/trussed-rsa-backend.git", tag = "v0.4.0" }

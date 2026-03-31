@@ -2,7 +2,13 @@
 
 ## [Unreleased][]
 
-[Unreleased]: https://github.com/trussed-dev/trussed-se050-backend/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/trussed-dev/trussed-se050-backend/compare/v0.7.0...HEAD
+
+-
+
+## [v0.7.0][] (2026-03-31)
+
+[v0.7.0]: https://github.com/Nitrokey/trussed-se050-backend/compare/v0.6.0...v0.7.0
 
 - Update `se05x` to v0.4.
 
