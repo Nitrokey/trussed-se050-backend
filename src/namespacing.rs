@@ -3,7 +3,8 @@ use littlefs2_core::Path;
 use rand::{CryptoRng, Rng, RngCore};
 use se05x::se05x::ObjectId;
 use serde::{Deserialize, Serialize};
-use trussed::{key::Kind, types::KeyId};
+use trussed::key::Kind;
+use trussed_core::types::KeyId;
 
 use crate::ID_RANGE;
 

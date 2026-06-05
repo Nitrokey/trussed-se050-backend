@@ -6,13 +6,8 @@ use se05x::{
     },
     t1::I2CForT1,
 };
-use trussed::{
-    serde_extensions::{Extension, ExtensionImpl},
-    service::ServiceResources,
-    types::Bytes,
-    types::CoreContext,
-    Error,
-};
+use trussed::{serde_extensions::ExtensionImpl, service::ServiceResources, types::CoreContext};
+use trussed_core::{serde_extensions::Extension, types::Bytes, Error};
 use trussed_se050_manage::{
     InfoReply, InfoRequest, Se050ManageExtension, Se050ManageRequest, TestSe050Reply,
 };
@@ -97,7 +92,7 @@ impl<Twi: I2CForT1, D: Delay> ExtensionImpl<Se050ManageExtension> for Se050Backe
                 let atr = self.enable()?;
                 let map_err = |_err| {
                     debug!("Failed to get memory: {_err:?}");
-                    trussed::Error::FunctionFailed
+                    trussed_core::Error::FunctionFailed
                 };
                 reply
                     .extend_from_slice(&[

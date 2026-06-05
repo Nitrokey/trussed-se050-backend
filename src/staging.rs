@@ -11,14 +11,16 @@ use se05x::t1::I2CForT1;
 use serde::{Deserialize, Serialize};
 use trussed::config::MAX_SERIALIZED_KEY_LENGTH;
 use trussed::key::{self};
-use trussed::service::Keystore;
-use trussed::types::{KeyId, Location};
+use trussed::store::Keystore;
 use trussed::{
+    serde_extensions::ExtensionImpl, service::ServiceResources, store::Filestore,
+    types::CoreContext,
+};
+use trussed_core::types::{KeyId, Location};
+use trussed_core::{
     api::{reply::UnwrapKey, request},
-    serde_extensions::ExtensionImpl,
-    service::{Filestore, ServiceResources},
-    types::Bytes,
-    types::{CoreContext, StorageAttributes},
+    serde_extensions::Extension,
+    types::{Bytes, StorageAttributes},
     Error,
 };
 use trussed_hpke::{
@@ -110,7 +112,7 @@ impl<Twi: I2CForT1, D: Delay> ExtensionImpl<ManageExtension> for Se050Backend<Tw
         _backend_ctx: &mut Self::Context,
         request: &ManageRequest,
         _resources: &mut ServiceResources<P>,
-    ) -> Result<<ManageExtension as trussed::serde_extensions::Extension>::Reply, Error> {
+    ) -> Result<<ManageExtension as Extension>::Reply, Error> {
         match request {
             ManageRequest::FactoryResetDevice(trussed_manage::FactoryResetDeviceRequest) => {
                 debug_now!("Factory resetting se050");
@@ -414,14 +416,14 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
     ) -> Result<UnsealedKey, Error> {
         if let Some((key, ty)) = self.wrap_key_data(key, se050_keystore, ns)? {
             return Ok(UnsealedKey {
-                data: key.serialize().into(),
+                data: key.serialize(),
                 kind: ty.into(),
             });
         }
 
         let key = core_keystore.load_key(key::Secrecy::Secret, None, &key)?;
         Ok(UnsealedKey {
-            data: key.serialize().into(),
+            data: key.serialize(),
             kind: KeyKind::Core,
         })
     }
@@ -447,13 +449,13 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
 fn load_hpke_public_key(
     key_id: &KeyId,
     keystore: &mut impl Keystore,
-) -> Result<hpke::PublicKey, trussed::Error> {
+) -> Result<hpke::PublicKey, trussed_core::Error> {
     let public_bytes: [u8; 32] = keystore
         .load_key(key::Secrecy::Public, Some(key::Kind::X255), key_id)?
         .material
         .as_slice()
         .try_into()
-        .map_err(|_| trussed::Error::InternalError)?;
+        .map_err(|_| trussed_core::Error::InternalError)?;
     Ok(public_bytes.into())
 }
 
@@ -499,9 +501,9 @@ impl<Twi: I2CForT1, D: Delay> ExtensionImpl<HpkeExtension> for Se050Backend<Twi,
         &mut self,
         core_ctx: &mut CoreContext,
         backend_ctx: &mut Self::Context,
-        request: &<HpkeExtension as trussed::serde_extensions::Extension>::Request,
+        request: &<HpkeExtension as Extension>::Request,
         resources: &mut ServiceResources<P>,
-    ) -> Result<<HpkeExtension as trussed::serde_extensions::Extension>::Reply, Error> {
+    ) -> Result<<HpkeExtension as Extension>::Reply, Error> {
         // FIXME: Have a real implementation from trussed
         let mut backend_path = core_ctx.path.clone();
         backend_path.push(BACKEND_DIR);
@@ -600,8 +602,12 @@ impl<Twi: I2CForT1, D: Delay> ExtensionImpl<HpkeExtension> for Se050Backend<Twi,
             }
             HpkeRequest::OpenKey(req) => {
                 let mut ct = req.sealed_key.clone();
-                let (ct, tag) = ct.split_last_chunk_mut().ok_or(trussed::Error::AeadError)?;
-                let (ct, enc_bytes) = ct.split_last_chunk_mut().ok_or(trussed::Error::AeadError)?;
+                let (ct, tag) = ct
+                    .split_last_chunk_mut()
+                    .ok_or(trussed_core::Error::AeadError)?;
+                let (ct, enc_bytes) = ct
+                    .split_last_chunk_mut()
+                    .ok_or(trussed_core::Error::AeadError)?;
 
                 let enc = (*enc_bytes).into();
                 self.hpke_open(
@@ -628,8 +634,12 @@ impl<Twi: I2CForT1, D: Delay> ExtensionImpl<HpkeExtension> for Se050Backend<Twi,
             HpkeRequest::OpenKeyFromFile(req) => {
                 let mut ct: Bytes<{ MAX_SERIALIZED_KEY_LENGTH + 32 + 16 }> =
                     filestore.read(&req.sealed_key, req.sealed_location)?;
-                let (ct, tag) = ct.split_last_chunk_mut().ok_or(trussed::Error::AeadError)?;
-                let (ct, enc_bytes) = ct.split_last_chunk_mut().ok_or(trussed::Error::AeadError)?;
+                let (ct, tag) = ct
+                    .split_last_chunk_mut()
+                    .ok_or(trussed_core::Error::AeadError)?;
+                let (ct, enc_bytes) = ct
+                    .split_last_chunk_mut()
+                    .ok_or(trussed_core::Error::AeadError)?;
 
                 let enc = (*enc_bytes).into();
                 self.hpke_open(

@@ -8,8 +8,9 @@ use super::{Error, Key, Salt, HASH_LEN, SALT_LEN};
 
 use hex_literal::hex;
 use hmac::{Hmac, Mac};
-use littlefs2_core::path;
+use littlefs2_core::{path, Path};
 use rand::Rng;
+use rand_core::{CryptoRng, RngCore};
 use se05x::{
     embedded_hal::Delay,
     se05x::{
@@ -26,13 +27,9 @@ use se05x::{
 use serde::{Deserialize, Serialize};
 use serde_byte_array::ByteArray;
 use sha2::Sha256;
-use trussed::{
-    api::NotBefore,
-    platform::CryptoRng,
-    service::{Filestore, RngCore},
-    types::{Bytes, Location, Path},
-};
+use trussed::store::Filestore;
 use trussed_auth::{request, PinId, MAX_PIN_LENGTH};
+use trussed_core::types::{Bytes, Location, NotBefore};
 
 const APP_SALT_PATH: &Path = path!("application_salt");
 
@@ -66,7 +63,7 @@ pub(crate) fn get_app_salt<S: Filestore, R: CryptoRng + RngCore>(
 pub(crate) fn delete_app_salt<S: Filestore>(
     fs: &mut S,
     location: Location,
-) -> Result<(), trussed::Error> {
+) -> Result<(), trussed_core::Error> {
     if fs.exists(APP_SALT_PATH, location) {
         fs.remove_file(APP_SALT_PATH, location)
     } else {
@@ -193,8 +190,8 @@ impl PinData {
     }
 
     pub fn save(&self, fs: &mut impl Filestore, location: Location) -> Result<(), Error> {
-        let data = trussed::cbor_serialize_bytes::<_, 256>(&self)
-            .map_err(|_| Error::SerializationFailed)?;
+        let mut data: Bytes<256> = Bytes::new();
+        cbor_smol::cbor_serialize_to(&self, &mut data).map_err(|_| Error::SerializationFailed)?;
         fs.write(&self.id.path(), location, &data)
             .map_err(|_| Error::WriteFailed)?;
         Ok(())
@@ -438,7 +435,7 @@ impl PinData {
         let data = fs
             .read::<1024>(&id.path(), location)
             .map_err(|_| Error::ReadFailed)?;
-        let this = trussed::cbor_deserialize(&data).map_err(|_| Error::DeserializationFailed)?;
+        let this = cbor_smol::cbor_deserialize(&data).map_err(|_| Error::DeserializationFailed)?;
         Ok(Self { id, ..this })
     }
 

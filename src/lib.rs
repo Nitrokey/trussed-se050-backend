@@ -18,10 +18,7 @@ use se05x::{
     },
     t1::I2CForT1,
 };
-use trussed::{
-    types::{Location, Mechanism},
-    Bytes,
-};
+use trussed_core::types::{Bytes, Location, Mechanism};
 
 #[macro_use]
 extern crate delog;
@@ -127,13 +124,13 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
         }
     }
 
-    fn enable(&mut self) -> Result<Atr, trussed::Error> {
+    fn enable(&mut self) -> Result<Atr, trussed_core::Error> {
         match self.enabled {
             EnableState::NotEnabled => match self.se.enable() {
                 Err(err) => {
                     error!("Enabling failed: {:?}", err);
                     self.enabled = EnableState::Failed(err);
-                    Err(trussed::Error::FunctionFailed)
+                    Err(trussed_core::Error::FunctionFailed)
                 }
                 Ok(atr) => {
                     self.enabled = EnableState::Enabled(atr);
@@ -141,11 +138,11 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
                 }
             },
             EnableState::Enabled(atr) => Ok(atr),
-            EnableState::Failed(_err) => Err(trussed::Error::FunctionFailed),
+            EnableState::Failed(_err) => Err(trussed_core::Error::FunctionFailed),
         }
     }
 
-    pub fn configure(&mut self) -> Result<(), trussed::Error> {
+    pub fn configure(&mut self) -> Result<(), trussed_core::Error> {
         self.enable()?;
         let buf = &mut [0; 1024];
         let configured_curves = self
@@ -153,13 +150,13 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
             .run_command(&ReadEcCurveList {}, buf)
             .map_err(|_err| {
                 debug!("Failed to list curves: {_err:?}");
-                trussed::Error::FunctionFailed
+                trussed_core::Error::FunctionFailed
             })?;
         for i in REQUIRED_CURVES {
             if !configured_curves.ids.contains(&i.curve.into()) {
                 self.se.create_and_set_curve_params(i).map_err(|_err| {
                     debug!("Failed to create curve: {_err:?}");
-                    trussed::Error::FunctionFailed
+                    trussed_core::Error::FunctionFailed
                 })?;
             }
         }

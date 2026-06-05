@@ -1,6 +1,7 @@
 use core::fmt;
 use hkdf::Hkdf;
-use littlefs2_core::{path, Path};
+use littlefs2_core::{path, Path, PathBuf};
+use rand_core::CryptoRng;
 use se05x::{
     embedded_hal::Delay,
     se05x::{
@@ -13,13 +14,15 @@ use serde_byte_array::ByteArray;
 use sha2::Sha256;
 use trussed::{
     key::{Kind, Secrecy},
-    platform::CryptoRng,
     serde_extensions::ExtensionImpl,
-    service::{Filestore, Keystore, RngCore, ServiceResources},
-    types::{Location, PathBuf},
-    Bytes,
+    service::{RngCore, ServiceResources},
+    store::{Filestore, Keystore},
 };
 use trussed_auth_backend::MAX_HW_KEY_LEN;
+use trussed_core::{
+    serde_extensions::Extension,
+    types::{Bytes, Location},
+};
 
 pub(crate) mod data;
 
@@ -64,7 +67,7 @@ pub(crate) enum Error {
     Se050,
 }
 
-impl From<Error> for trussed::error::Error {
+impl From<Error> for trussed_core::Error {
     fn from(error: Error) -> Self {
         match error {
             Error::_NotFound => Self::NoSuchKey,
@@ -257,12 +260,9 @@ impl<Twi: I2CForT1, D: Delay> ExtensionImpl<trussed_auth::AuthExtension> for Se0
         &mut self,
         core_ctx: &mut trussed::types::CoreContext,
         backend_ctx: &mut Self::Context,
-        request: &<trussed_auth::AuthExtension as trussed::serde_extensions::Extension>::Request,
+        request: &<trussed_auth::AuthExtension as Extension>::Request,
         resources: &mut trussed::service::ServiceResources<P>,
-    ) -> Result<
-        <trussed_auth::AuthExtension as trussed::serde_extensions::Extension>::Reply,
-        trussed::Error,
-    > {
+    ) -> Result<<trussed_auth::AuthExtension as Extension>::Reply, trussed_core::Error> {
         let backend_ctx = backend_ctx.with_namespace(&self.ns, &core_ctx.path);
         let auth_ctx = backend_ctx.auth;
         let ns = backend_ctx.ns;
@@ -364,7 +364,7 @@ impl<Twi: I2CForT1, D: Delay> ExtensionImpl<trussed_auth::AuthExtension> for Se0
                 let fs = &mut fs(resources);
 
                 if fs.exists(&request.id.path(), self.metadata_location) {
-                    return Err(trussed::Error::FunctionFailed);
+                    return Err(trussed_core::Error::FunctionFailed);
                 }
                 let pin = PinData::new(request.id, ns, keystore.rng(), request.derive_key);
                 let app_key = self.get_app_key(client_id, global_fs, auth_ctx, keystore.rng())?;

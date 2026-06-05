@@ -27,15 +27,19 @@ use se05x::{
 };
 use serde::{Deserialize, Serialize};
 use trussed::{
-    api::{reply, request, Request},
     backend::Backend,
     config::MAX_MESSAGE_LENGTH,
     key::{self, Kind, Secrecy},
-    service::{Keystore, MechanismImpl, ServiceResources},
-    types::{CoreContext, KeyId, KeySerialization, Location, Mechanism, Message},
-    Bytes, Error,
+    service::{MechanismImpl, ServiceResources},
+    store::Keystore,
+    types::CoreContext,
 };
-use trussed_core::types::EncryptedData;
+use trussed_core::{
+    api::{reply, request, Reply, Request},
+    types::{Bytes, KeyId, KeySerialization, Location, Mechanism, Message},
+    types::{EncryptedData, SignatureSerialization},
+    Error,
+};
 use trussed_rsa_types::{RsaImportFormat, RsaPublicParts};
 
 use crate::{
@@ -222,7 +226,7 @@ const MAX_SERIALIZED_LEN: usize = 132;
 
 #[allow(clippy::too_many_arguments)]
 impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
-    fn random_bytes(&mut self, count: usize) -> Result<trussed::Reply, Error> {
+    fn random_bytes(&mut self, count: usize) -> Result<Reply, Error> {
         if count >= MAX_MESSAGE_LENGTH {
             return Err(Error::MechanismParamInvalid);
         }
@@ -465,7 +469,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
             .inspect_err(|_err| {
                 error_now!("Failed reimport: {_err:?}");
             })?;
-        let parsed: VolatileKeyMaterialRef = trussed::cbor_deserialize(&material.material)
+        let parsed: VolatileKeyMaterialRef = cbor_smol::cbor_deserialize(&material.material)
             .map_err(|_err| {
                 error!("Failed to parsed volatile key data: {_err:?}");
                 Error::CborError
@@ -1176,11 +1180,15 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
             })?
             .data;
         let key = key_id_for_obj(object_id.0, ty);
-        let material: Bytes<1024> = trussed::cbor_serialize_bytes(&VolatileKeyMaterialRef {
-            object_id,
-            exported_material: exported,
-            is_only_private: false,
-        })
+        let mut material: Bytes<1024> = Bytes::new();
+        cbor_smol::cbor_serialize_to(
+            &VolatileKeyMaterialRef {
+                object_id,
+                exported_material: exported,
+                is_only_private: false,
+            },
+            &mut material,
+        )
         .map_err(|_err| {
             error!("Failed to serialize exported key: {_err:?}");
             Error::FunctionFailed
@@ -1842,12 +1850,12 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
         })?;
 
         let signature = match req.format {
-            trussed::types::SignatureSerialization::Asn1Der => Bytes::try_from(res.signature)
+            SignatureSerialization::Asn1Der => Bytes::try_from(res.signature)
                 .map_err(|_err| {
                     error_now!("Failed to write signature to response: {_err:?}");
                 })
                 .unwrap(),
-            trussed::types::SignatureSerialization::Raw => {
+            SignatureSerialization::Raw => {
                 let mut signature = Bytes::new();
                 assert!(signature.capacity() > 2 * field_byte_size);
                 signature
@@ -2483,7 +2491,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
         data.material.copy_within(1.., 0);
         data.material.truncate(expected_len);
         Ok(reply::SerializeKey {
-            serialized_key: data.material.into(),
+            serialized_key: data.material,
         })
     }
 
@@ -2569,7 +2577,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
         let mut data = core_keystore.load_key(Secrecy::Public, Some(Kind::X255), &req.key)?;
         data.material.reverse();
         Ok(reply::SerializeKey {
-            serialized_key: data.material.into(),
+            serialized_key: data.material,
         })
     }
     fn serialize_ed255_key(
@@ -2585,7 +2593,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
         let mut data = core_keystore.load_key(Secrecy::Public, Some(Kind::Ed255), &req.key)?;
         data.material.reverse();
         Ok(reply::SerializeKey {
-            serialized_key: data.material.into(),
+            serialized_key: data.material,
         })
     }
 
@@ -2602,7 +2610,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
 
         let data = core_keystore.load_key(Secrecy::Public, Some(kind), &req.key)?;
         Ok(reply::SerializeKey {
-            serialized_key: data.material.into(),
+            serialized_key: data.material,
         })
     }
 
@@ -2788,7 +2796,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
         let key_id = match ty {
             WrappedKeyType::Volatile => {
                 let mat: VolatileKeyMaterialRef =
-                    trussed::cbor_deserialize(&material).map_err(|_err| Error::CborError)?;
+                    cbor_smol::cbor_deserialize(&material).map_err(|_err| Error::CborError)?;
                 if let Some((parsed_ns, _)) = ParsedObjectId::parse(mat.object_id.0) {
                     if parsed_ns != ns {
                         return Err(Error::ObjectHandleInvalid);
@@ -2804,7 +2812,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
                     return Err(Error::FunctionFailed);
                 }
                 let mat: VolatileRsaKey =
-                    trussed::cbor_deserialize(&material).map_err(|_err| Error::CborError)?;
+                    cbor_smol::cbor_deserialize(&material).map_err(|_err| Error::CborError)?;
                 if let Some((parsed_ns, _)) = ParsedObjectId::parse(mat.key_id.0) {
                     if parsed_ns != ns {
                         return Err(Error::ObjectHandleInvalid);
@@ -3487,11 +3495,15 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
             })?
             .data;
         let key = key_id_for_obj(id.0, ty);
-        let material: Bytes<1024> = trussed::cbor_serialize_bytes(&VolatileKeyMaterialRef {
-            object_id: id,
-            exported_material: exported,
-            is_only_private: matches!(key_type, P1KeyType::Private),
-        })
+        let mut material: Bytes<1024> = Bytes::new();
+        cbor_smol::cbor_serialize_to(
+            &VolatileKeyMaterialRef {
+                object_id: id,
+                exported_material: exported,
+                is_only_private: matches!(key_type, P1KeyType::Private),
+            },
+            &mut material,
+        )
         .map_err(|_err| {
             debug!("Failed to encode exported key: {_err:?}");
             Error::FunctionFailed
@@ -3913,7 +3925,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
         backend_ctx: &mut Context,
         request: &Request,
         resources: &mut ServiceResources<P>,
-    ) -> Result<trussed::Reply, Error> {
+    ) -> Result<Reply, Error> {
         // FIXME: Have a real implementation from trussed
         let mut backend_path = core_ctx.path.clone();
         backend_path.push(BACKEND_DIR);
@@ -4026,7 +4038,7 @@ impl<Twi: I2CForT1, D: Delay> Backend for Se050Backend<Twi, D> {
         backend_ctx: &mut Self::Context,
         request: &Request,
         resources: &mut trussed::service::ServiceResources<P>,
-    ) -> Result<trussed::Reply, Error> {
+    ) -> Result<Reply, Error> {
         self.core_request_internal(core_ctx, backend_ctx, request, resources)
     }
 }

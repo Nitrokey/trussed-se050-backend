@@ -49,12 +49,12 @@ pub struct SharedSecret([u8; 32]);
 pub struct PublicKey([u8; 32]);
 
 impl TryFrom<&[u8]> for SharedSecret {
-    type Error = trussed::Error;
+    type Error = trussed_core::Error;
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         Ok(Self(
             value
                 .try_into()
-                .map_err(|_| trussed::Error::InternalError)?,
+                .map_err(|_| trussed_core::Error::InternalError)?,
         ))
     }
 }
@@ -73,12 +73,12 @@ impl Deref for SharedSecret {
 }
 
 impl TryFrom<&[u8]> for PublicKey {
-    type Error = trussed::Error;
+    type Error = trussed_core::Error;
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         Ok(Self(
             value
                 .try_into()
-                .map_err(|_| trussed::Error::InternalError)?,
+                .map_err(|_| trussed_core::Error::InternalError)?,
         ))
     }
 }
