@@ -2,13 +2,13 @@
 
 ## [Unreleased][]
 
-[Unreleased]: https://github.com/trussed-dev/trussed-se050-backend/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/trussed-dev/trussed-se050-backend/compare/v0.8.0...HEAD
 
 -
 
-## [v0.8.0-rc.1][] (2026-06-16)
+## [v0.8.0][] (2026-07-23)
 
-[v0.8.0-rc.1]: https://github.com/Nitrokey/trussed-se050-backend/compare/v0.7.0...v0.8.0-rc.1
+[v0.8.0]: https://github.com/Nitrokey/trussed-se050-backend/compare/v0.7.0...v0.8.0
 
 - Update `trussed` to v0.2.
 
