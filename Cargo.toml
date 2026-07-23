@@ -25,9 +25,9 @@ serde.workspace = true
 trussed-core = { workspace = true, features = ["brainpoolp256r1", "brainpoolp384r1", "brainpoolp512r1", "chacha8-poly1305", "crypto-client", "ed255", "p256", "p384", "p521", "rsa2048", "rsa3072", "rsa4096", "secp256k1", "x255"] }
 
 se05x = { version  = "0.4", features = ["serde", "builder"] }
-trussed = { version = "=0.2.0-rc.1", default-features = false, features = ["chacha8-poly1305", "crypto-client", "serde-extensions"] }
+trussed = { version = "0.2", default-features = false, features = ["chacha8-poly1305", "crypto-client", "serde-extensions"] }
 trussed-auth = "0.5"
-trussed-auth-backend = "=0.2.0-rc.1"
+trussed-auth-backend = "0.2"
 trussed-manage = "0.3.0"
 trussed-se050-manage = "0.3.0"
 trussed-wrap-key-to-file = "0.3.0"
@@ -45,7 +45,7 @@ rand_core = "0.6"
 littlefs2-core = "0.1.1"
 cbor-smol = { version = "0.5.0", features = ["heapless-bytes-v0-5"] }
 serde_bytes = { version = "0.11.12", default-features = false }
-trussed-rsa-alloc = "=0.5.0-rc.1"
+trussed-rsa-alloc = "0.5"
 trussed-rsa-types = "0.2"
 postcard = "0.7.3"
 crypto-bigint = { version = "0.5.3", default-features = false }
@@ -57,7 +57,7 @@ der = "0.7.9"
 chacha20poly1305 = { version = "0.10.1", default-features = false }
 
 [dev-dependencies]
-admin-app = { git = "https://github.com/Nitrokey/admin-app.git", tag = "v0.1.0-nitrokey.22", features = ["migration-tests"] }
+admin-app = { version = "0.2", features = ["migration-tests"] }
 serde_test = "1.0.176"
 
 [patch.crates-io]

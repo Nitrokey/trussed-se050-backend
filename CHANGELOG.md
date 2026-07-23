@@ -10,7 +10,7 @@
 
 [v0.8.0-rc.1]: https://github.com/Nitrokey/trussed-se050-backend/compare/v0.7.0...v0.8.0-rc.1
 
-- Update `se05x` to v0.4.
+- Update `trussed` to v0.2.
 
 ## [v0.7.0][] (2026-03-31)
 
