@@ -3017,11 +3017,12 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
                 })?;
             cont = to_delete.more.is_more();
 
-            assert_eq!(to_delete.ids.len() % 4, 0);
-            offset += (to_delete.ids.len() / 4) as u16;
-            for obj_slice in to_delete.ids.chunks_exact(4) {
-                let obj = ObjectId(obj_slice.try_into().unwrap());
-                debug_now!("Dealing with obj: {obj_slice:02x?}");
+            let (chunks, rem) = to_delete.ids.as_chunks();
+            assert!(rem.is_empty());
+            offset += chunks.len() as u16;
+            for id_bytes in chunks {
+                let obj = ObjectId(*id_bytes);
+                debug_now!("Dealing with obj: {obj:?}");
                 if !object_in_range(obj) {
                     continue;
                 }
