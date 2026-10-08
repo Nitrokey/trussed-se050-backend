@@ -299,9 +299,25 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
         se050_keystore: &mut impl Keystore,
     ) -> Result<reply::Delete, Error> {
         let buf = &mut [0; 1024];
-        self.se
-            .run_command(&DeleteSecureObject { object_id }, buf)
-            .or(Err(Error::FunctionFailed))?;
+        let should_delete = self
+            .se
+            .run_command(&CheckObjectExists { object_id }, buf)
+            .inspect_err(|_err| {
+                error_now!("Call failed: {_err:?}");
+            })
+            .or(Err(Error::FunctionFailed))?
+            .result
+            .is_success();
+        debug!("Deleting volatile key, should delete from SE050: {should_delete}");
+        if should_delete {
+            self.se
+                .run_command(&DeleteSecureObject { object_id }, buf)
+                .inspect_err(|_err| {
+                    error_now!("Failed to delete object: {_err:?}");
+                })
+                .or(Err(Error::FunctionFailed))?;
+        }
+
         Ok(reply::Delete {
             success: se050_keystore.delete_key(key),
         })
@@ -3001,11 +3017,12 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
                 })?;
             cont = to_delete.more.is_more();
 
-            assert_eq!(to_delete.ids.len() % 4, 0);
-            offset += (to_delete.ids.len() / 4) as u16;
-            for obj_slice in to_delete.ids.chunks_exact(4) {
-                let obj = ObjectId(obj_slice.try_into().unwrap());
-                debug_now!("Dealing with obj: {obj_slice:02x?}");
+            let (chunks, rem) = to_delete.ids.as_chunks();
+            assert!(rem.is_empty());
+            offset += chunks.len() as u16;
+            for id_bytes in chunks {
+                let obj = ObjectId(*id_bytes);
+                debug_now!("Dealing with obj: {obj:?}");
                 if !object_in_range(obj) {
                     continue;
                 }

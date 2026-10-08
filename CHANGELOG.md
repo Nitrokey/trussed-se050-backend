@@ -2,9 +2,13 @@
 
 ## [Unreleased][]
 
-[Unreleased]: https://github.com/trussed-dev/trussed-se050-backend/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/trussed-dev/trussed-se050-backend/compare/v0.8.1...HEAD
 
--
+## [v0.8.1][] (2026-10-08)
+
+[v0.8.1]: https://github.com/Nitrokey/trussed-se050-backend/compare/v0.8.0...v0.8.1
+
+- Fix deletion of volatile non-RSA keys that have been cleared
 
 ## [v0.8.0][] (2026-07-23)
 
