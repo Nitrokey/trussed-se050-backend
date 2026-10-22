@@ -1826,7 +1826,7 @@ impl<Twi: I2CForT1, D: Delay> Se050Backend<Twi, D> {
                 (Kind::BrainpoolP512R1, EcDsaSignatureAlgo::Sha512, 64)
             }
             (Mechanism::Secp256k1Prehashed, KeyType::Secp256k1) => {
-                (Kind::Secp256k1, EcDsaSignatureAlgo::Sha256, 64)
+                (Kind::Secp256k1, EcDsaSignatureAlgo::Sha256, 32)
             }
             _ => return Err(Error::WrongKeyKind),
         };
