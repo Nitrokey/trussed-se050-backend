@@ -2,7 +2,13 @@
 
 ## [Unreleased][]
 
-[Unreleased]: https://github.com/trussed-dev/trussed-se050-backend/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/trussed-dev/trussed-se050-backend/compare/v0.8.2...HEAD
+
+## [v0.8.2][] (2026-10-27)
+
+[v0.8.2]: https://github.com/Nitrokey/trussed-se050-backend/compare/v0.8.1...v0.8.2
+
+- Fix signature serialization of secp256k1
 
 ## [v0.8.1][] (2026-10-08)
 
