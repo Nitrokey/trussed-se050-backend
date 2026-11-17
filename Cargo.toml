@@ -53,7 +53,7 @@ salty = "0.3.0"
 p256-cortex-m4 = { version = "0.1.0-alpha.6", features = ["prehash", "sec1-signatures"] }
 bitflags = "2.5.0"
 der = "0.7.9"
-chacha20poly1305 = { version = "0.10.1", default-features = false }
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["reduced-round"] }
  
  
 [dev-dependencies]
