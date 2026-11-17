@@ -2,10 +2,7 @@
 
 use bitflags::bitflags;
 use cbor_smol::{cbor_deserialize, cbor_serialize};
-use crypto_bigint::{
-    subtle::{ConstantTimeEq, ConstantTimeGreater, CtOption},
-    Checked, CtChoice, Encoding, U4096,
-};
+use crypto_bigint::{Checked, CtEq, CtGt, CtOption, Encoding, NonZero, U4096};
 use heapless::Vec;
 use hex_literal::hex;
 use littlefs2_core::{path, Path};
@@ -136,7 +133,7 @@ fn be_slice_to_bigint(data: &[u8]) -> Option<U4096> {
     }
     let mut arr = [0; 4096 / 8];
     arr[RSA_ARR_SIZE - data.len()..].copy_from_slice(data);
-    Some(U4096::from_be_bytes(arr))
+    Some(U4096::from_be_bytes(arr.into()))
 }
 
 /// Take the import format from the request data and return the integers required by the SE050
@@ -150,34 +147,27 @@ fn handle_rsa_import_format(data: &[u8], size: u16) -> Option<RsaImportElements<
         })
         .ok()?;
     let e = be_slice_to_bigint(parsed.e)?;
-    if e.bits() > size as usize {
+    if e.bit_width() > size as u32 {
         warn!("Got too large e");
         return None;
     }
 
-    let p = Checked(CtOption::new(
-        be_slice_to_bigint(parsed.p)?,
-        CtChoice::TRUE.into(),
-    ));
-    let q = Checked(CtOption::new(
-        be_slice_to_bigint(parsed.q)?,
-        CtChoice::TRUE.into(),
-    ));
+    let p = Checked(CtOption::some(be_slice_to_bigint(parsed.p)?));
+    let q = Checked(CtOption::some(be_slice_to_bigint(parsed.q)?));
     let n_opt = p * q;
-    let one = Checked(CtOption::new(U4096::ONE, CtChoice::TRUE.into()));
+    let one = Checked(CtOption::some(U4096::ONE));
 
     let phi: CtOption<_> = ((p - one) * (q - one)).into();
-    let d_opt = phi.and_then(|phi| {
-        let (d, success) = e.inv_mod(&phi);
-        CtOption::new(d, success.into())
-    });
+    let d_opt = phi
+        .and_then(|phi| NonZero::new(phi).map(|phi| e.invert_mod(&phi)))
+        .into_option()?;
 
     let maybe_d_n: Option<_> = d_opt
         .and_then(|d| {
             let n: CtOption<_> = n_opt.into();
             n.and_then(|n| {
                 let value = (d.to_be_bytes(), n.to_be_bytes());
-                let choice = !(n.bits() as u64).ct_gt(&size.into());
+                let choice = !(n.bit_width() as u64).ct_gt(&size.into());
                 CtOption::new(value, choice)
             })
         })
@@ -185,7 +175,11 @@ fn handle_rsa_import_format(data: &[u8], size: u16) -> Option<RsaImportElements<
 
     let (d, n) = maybe_d_n?;
 
-    Some(RsaImportElements { e: parsed.e, d, n })
+    Some(RsaImportElements {
+        e: parsed.e,
+        d: d.into(),
+        n: n.into(),
+    })
 }
 
 /// The SE050 doesn't expect pre-hashed data, but the RSA backend expects a prehashed DigestInf
