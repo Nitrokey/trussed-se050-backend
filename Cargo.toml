@@ -45,17 +45,17 @@ rand_core = "0.6"
 littlefs2-core = "0.1.1"
 cbor-smol = { version = "0.5.0", features = ["heapless-bytes-v0-5"] }
 serde_bytes = { version = "0.11.12", default-features = false }
-trussed-rsa-alloc = "0.5"
 trussed-rsa-types = "0.2"
-postcard = "0.7.3"
-crypto-bigint = { version = "0.5.3", default-features = false }
+postcard = { version = "0.7.3", default-features = false }
+crypto-bigint = { version = "0.7.0", default-features = false }
 p256 = { version = "0.13.2", default-features = false, features = ["ecdsa-core"] }
 salty = "0.3.0"
 p256-cortex-m4 = { version = "0.1.0-alpha.6", features = ["prehash", "sec1-signatures"] }
 bitflags = "2.5.0"
 der = "0.7.9"
-chacha20poly1305 = { version = "0.10.1", default-features = false }
-
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["reduced-round"] }
+ 
+ 
 [dev-dependencies]
 admin-app = { version = "0.2", features = ["migration-tests"] }
 serde_test = "1.0.176"

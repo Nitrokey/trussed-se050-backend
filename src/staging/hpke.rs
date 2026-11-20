@@ -1,6 +1,6 @@
 use core::ops::Deref;
 
-use chacha20poly1305::{aead, AeadInPlace, ChaCha8Poly1305, KeyInit};
+use chacha20poly1305::{aead, AeadInOut, ChaCha8Poly1305, KeyInit};
 
 type HkdfSha256 = hkdf::Hkdf<sha2::Sha256>;
 type HkdfSha256Extract = hkdf::HkdfExtract<sha2::Sha256>;
@@ -126,7 +126,7 @@ impl Context {
         let nonce = (&self.base_nonce).into();
         let aead = ChaCha8Poly1305::new((&self.key).into());
         let tag = aead
-            .encrypt_in_place_detached(nonce, aad, plaintext)
+            .encrypt_inout_detached(nonce, aad, plaintext.into())
             .expect("Not used to encrypt data too large");
 
         tag.into()
@@ -140,7 +140,7 @@ impl Context {
     ) -> Result<(), aead::Error> {
         let nonce = (&self.base_nonce).into();
         let aead = ChaCha8Poly1305::new((&self.key).into());
-        aead.decrypt_in_place_detached(nonce, aad, ciphertext, (&tag).into())
+        aead.decrypt_inout_detached(nonce, aad, ciphertext.into(), (&tag).into())
     }
 }
 
